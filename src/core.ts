@@ -1,0 +1,231 @@
+/**
+ * Shared responder logic used by BOTH the CLI commands and the MCP tools, so
+ * the two surfaces behave identically. No console output here — callers render.
+ */
+
+import { ReqportApiError, ReqportClient } from "./client.js";
+import type {
+  AccountInstrument,
+  DecodedPayload,
+  PayloadMetaResponse,
+  ResponseResult,
+  WorkflowInstanceResponse,
+} from "./types.js";
+
+/** Does this workflow type use the purpose-built business-relationship endpoint? */
+export function isBusinessRelationship(workflowType: string | undefined): boolean {
+  if (!workflowType) return false;
+  return workflowType.toUpperCase().includes("BUSINESS_RELATIONSHIP");
+}
+
+/** Decode base64 plaintext into text + parsed JSON (best effort). */
+function decodeItem(
+  payloadId: string,
+  ok: boolean,
+  contentType?: string | null,
+  plaintextBase64?: string | null,
+  errorCode?: string | null
+): DecodedPayload {
+  if (!ok || !plaintextBase64) {
+    return { payloadId, ok: false, contentType, errorCode };
+  }
+  const text = Buffer.from(plaintextBase64, "base64").toString("utf-8");
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    json = undefined;
+  }
+  return { payloadId, ok: true, contentType, text, json };
+}
+
+/** Decrypt up to 20 payloads and return decoded results in request order. */
+export async function decodePayloads(
+  client: ReqportClient,
+  payloadIds: string[]
+): Promise<DecodedPayload[]> {
+  if (payloadIds.length === 0) return [];
+  const res = await client.decryptBatch(payloadIds);
+  return res.items.map((i) =>
+    decodeItem(i.payloadId, i.ok, i.contentType, i.plaintextBase64, i.errorCode)
+  );
+}
+
+export type RequestDetail = {
+  workflow: WorkflowInstanceResponse;
+  requestPayload?: PayloadMetaResponse;
+  /** The decrypted request content, when a request payload exists and decrypts. */
+  decoded?: DecodedPayload;
+  /** Non-fatal note explaining a missing/failed request-payload read. */
+  readNote?: string;
+};
+
+/**
+ * Full read of one request: workflow row + request-payload metadata + a
+ * server-assisted decrypt of that payload. Missing/undecryptable payloads are
+ * reported via readNote rather than thrown (an NFOU-style request may carry
+ * only a header).
+ */
+export async function readRequest(
+  client: ReqportClient,
+  id: string
+): Promise<RequestDetail> {
+  const workflow = await client.getWorkflow(id);
+  let requestPayload: PayloadMetaResponse | undefined;
+  try {
+    requestPayload = await client.getRequestPayload(id);
+  } catch (e) {
+    return {
+      workflow,
+      readNote:
+        e instanceof ReqportApiError
+          ? `No readable request payload (request-payload ${e.status}).`
+          : `Could not read request payload: ${(e as Error).message}`,
+    };
+  }
+  if (!requestPayload?.payloadId) {
+    return { workflow, requestPayload, readNote: "Request has no payloadId." };
+  }
+  const [decoded] = await decodePayloads(client, [requestPayload.payloadId]);
+  return {
+    workflow,
+    requestPayload,
+    decoded,
+    readNote:
+      decoded && !decoded.ok
+        ? `Request payload did not decrypt (${decoded.errorCode ?? "unknown"}).`
+        : undefined,
+  };
+}
+
+/**
+ * Parse an --account argument of the form
+ *   TYPE:identifier[:scheme[:label]]
+ * e.g. ACCOUNT:SE123:IBAN:Main or WALLET:0xabc or CARD:411111******1111:PAN:Visa
+ */
+export function parseAccountArg(raw: string): AccountInstrument {
+  const parts = raw.split(":");
+  const type = (parts[0] ?? "").toUpperCase();
+  if (type !== "ACCOUNT" && type !== "WALLET" && type !== "CARD") {
+    throw new Error(
+      `Invalid --account "${raw}": type must be ACCOUNT, WALLET or CARD (format TYPE:identifier[:scheme[:label]]).`
+    );
+  }
+  const identifier = parts[1];
+  if (!identifier) {
+    throw new Error(
+      `Invalid --account "${raw}": missing identifier (format TYPE:identifier[:scheme[:label]]).`
+    );
+  }
+  const instrument: AccountInstrument = { instrumentType: type, identifier };
+  if (parts[2]) instrument.scheme = parts[2];
+  if (parts.length > 3) instrument.label = parts.slice(3).join(":");
+  return instrument;
+}
+
+export type RespondInput = {
+  /** Business-relationship answer (true/false). Undefined for the generic path. */
+  hasRelationship?: boolean;
+  /** Generic-path status when not a business-relationship request. */
+  status?: "COMP" | "NFOU";
+  note?: string;
+  accounts?: AccountInstrument[];
+  /** A pre-sealed answer document payloadId (advanced). */
+  payloadId?: string;
+  /** Generic-path free-text answer. */
+  freeText?: string;
+};
+
+export type RespondOutcome = {
+  endpoint: "business-relationship-response" | "response";
+  workflowType: string;
+  requestId: string;
+  submitted: Record<string, unknown>;
+  result: ResponseResult;
+};
+
+/**
+ * Decide the endpoint from the workflow type and submit the answer. Reused by
+ * the CLI `respond` command and the MCP tool.
+ */
+export async function performRespond(
+  client: ReqportClient,
+  id: string,
+  input: RespondInput
+): Promise<RespondOutcome> {
+  const workflow = await client.getWorkflow(id);
+  const br = isBusinessRelationship(workflow.workflowType);
+
+  if (br) {
+    const hasRelationship =
+      input.hasRelationship ??
+      (input.status === "COMP" ? true : input.status === "NFOU" ? false : undefined);
+    if (hasRelationship === undefined) {
+      throw new Error(
+        "This is a business-relationship check — pass hasRelationship (true/false)."
+      );
+    }
+    const answer: Record<string, unknown> = { hasRelationship };
+    if (input.note) answer.note = input.note;
+    if (hasRelationship) {
+      if (input.accounts && input.accounts.length > 0) answer.accounts = input.accounts;
+      if (input.payloadId) answer.payloadId = input.payloadId;
+      if (!answer.accounts && !answer.payloadId) {
+        throw new Error(
+          "A true answer must disclose at least one --account (inline typed instrument) or a --payload-id (pre-sealed answer document)."
+        );
+      }
+    }
+    const result = await client.submitBusinessRelationshipResponse(id, answer as never);
+    return {
+      endpoint: "business-relationship-response",
+      workflowType: workflow.workflowType,
+      requestId: id,
+      submitted: answer,
+      result,
+    };
+  }
+
+  // Generic responder path.
+  const status =
+    input.status ??
+    (input.hasRelationship === true
+      ? "COMP"
+      : input.hasRelationship === false
+        ? "NFOU"
+        : undefined);
+  if (!status) {
+    throw new Error(
+      "Pass --status COMP or --status NFOU for this request type."
+    );
+  }
+  const items = [] as NonNullable<Parameters<typeof client.submitResponse>[1]["items"]>;
+  if (input.freeText) {
+    items.push({ mode: "unstructured", freeText: input.freeText });
+  }
+  if (input.payloadId) {
+    items.push({
+      mode: "structured",
+      document: { docType: "ATTACHMENT", payloadId: input.payloadId },
+    });
+  }
+  const submission = {
+    status,
+    items,
+    ...(input.note ? { note: input.note } : {}),
+    ...(input.accounts && input.accounts.length > 0 ? { accounts: input.accounts } : {}),
+  };
+  if (status === "COMP" && items.length === 0 && (!input.accounts || input.accounts.length === 0)) {
+    throw new Error(
+      "A COMP response must carry at least one item (--free-text or --payload-id) or a disclosed --account."
+    );
+  }
+  const result = await client.submitResponse(id, submission as never);
+  return {
+    endpoint: "response",
+    workflowType: workflow.workflowType,
+    requestId: id,
+    submitted: submission as Record<string, unknown>,
+    result,
+  };
+}

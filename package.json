@@ -1,0 +1,44 @@
+{
+  "name": "@reqport/cli",
+  "version": "0.1.0",
+  "description": "Reqport responder CLI + MCP server — discover, read, and answer content-blind data requests (e.g. Engagemangskontroll / business-relationship checks) with an rqk_live_ API key.",
+  "keywords": [
+    "reqport",
+    "iso20022",
+    "auth.002",
+    "responder",
+    "mcp",
+    "cli"
+  ],
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "reqport": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    ".claude",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "prepare": "npm run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "commander": "12.1.0",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.2",
+    "tsx": "4.23.13",
+    "typescript": "5.9.3"
+  }
+}
