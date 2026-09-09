@@ -42,6 +42,15 @@ export function developerConsoleUrl(portalUrl: string, locale = "en"): string {
   return `${portalUrl.replace(/\/$/, "")}/${locale}/developer`;
 }
 
+/**
+ * Anti-phishing visual confirmation code. MUST byte-match the portal's algorithm
+ * (reqport-portal #544): strip non-alphanumeric chars from `state`, take the
+ * first 8, uppercase. The terminal and the console page then always agree.
+ */
+export function confirmationCode(state: string): string {
+  return state.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8).toUpperCase();
+}
+
 export async function runPairing(
   opts: PairingOptions,
   progress: PairingProgress
@@ -53,7 +62,7 @@ export async function runPairing(
 
   const { verifier, challenge } = createPkce(); // challenge = b64url(SHA256(verifier))
   const state = randomState();
-  const confirmation = state.slice(0, 8);
+  const confirmation = confirmationCode(state);
 
   const authUrl = new URL(`${portalUrl}/${locale}/developer/cli-auth`);
   authUrl.searchParams.set("state", state);
@@ -88,6 +97,11 @@ export async function runPairing(
         await Promise.race([sleep(intervalMs), cancelled]);
         continue;
       }
+      if (result === "rate_limited") {
+        // Back off one extra interval, then keep polling.
+        await Promise.race([sleep(intervalMs * 2), cancelled]);
+        continue;
+      }
       return result;
     }
   } finally {
@@ -99,7 +113,7 @@ async function pollOnce(
   pollUrl: string,
   state: string,
   verifier: string
-): Promise<PairingResult | "pending"> {
+): Promise<PairingResult | "pending" | "rate_limited"> {
   let res: Response;
   try {
     res = await fetch(pollUrl, {
@@ -113,6 +127,7 @@ async function pollOnce(
   }
 
   if (res.status === 202) return "pending";
+  if (res.status === 429) return "rate_limited"; // retryable — back off and keep polling
 
   if (res.status === 200) {
     const body = (await res.json().catch(() => ({}))) as {
@@ -135,6 +150,9 @@ async function pollOnce(
     };
   }
 
+  if (res.status === 400) {
+    throw new Error("The portal rejected the pairing request (bad request). Run `qp login` again.");
+  }
   if (res.status === 403) {
     throw new Error("The portal rejected the pairing (verifier mismatch). Run `qp login` again.");
   }
