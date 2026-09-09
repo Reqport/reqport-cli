@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * @reqport/cli — responder CLI + MCP server.
+ * @reqport/cli — the `qp` responder CLI + MCP server.
  *
- * Auth: REQPORT_API_KEY (rqk_live_...) read from the environment at runtime.
- * The key is never accepted as a flag and never logged. Target environment via
- * --env sandbox|uat|prod (default sandbox, or REQPORT_ENV).
+ * Auth for automation: REQPORT_API_KEY (rqk_live_...) from the environment.
+ * Auth for humans: `qp login` (Signicat, browser). Key is never a flag / logged.
+ * Target environment via --env sandbox|uat|prod (default sandbox / REQPORT_ENV).
  */
 
 import { Command } from "commander";
@@ -17,10 +17,11 @@ async function main(): Promise<void> {
   const program = new Command();
 
   program
-    .name("reqport")
+    .name("qp")
     .description(
-      "Answer Reqport data requests (e.g. Engagemangskontroll / business-relationship checks) with an rqk_live_ API key.\n" +
-        "Set REQPORT_API_KEY in your environment. Content is decrypted server-side in the TEE — no client crypto needed."
+      "Answer Reqport data requests (e.g. Engagemangskontroll / business-relationship checks).\n" +
+        "Automation: set REQPORT_API_KEY (rqk_live_). Humans: run `qp login`, then `qp keys create`.\n" +
+        "Content is decrypted server-side in the TEE — no client crypto needed."
     )
     .version(VERSION)
     .option("-e, --env <env>", "target environment: sandbox | uat | prod", process.env.REQPORT_ENV)
@@ -30,7 +31,6 @@ async function main(): Promise<void> {
   const globalEnv = () => resolveEnv(program.opts().env as string | undefined);
   const globalJson = () => Boolean(program.opts().json);
 
-  // Each action returns a process exit code; wrap() handles errors uniformly.
   const wrap =
     (fn: () => Promise<number>) =>
     async (): Promise<void> => {
@@ -41,6 +41,47 @@ async function main(): Promise<void> {
         process.exitCode = 1;
       }
     };
+
+  // ── login / logout / whoami ────────────────────────────────────────────────
+  program
+    .command("login")
+    .description("Sign in via Signicat (browser) to mint your own API keys")
+    .option("--device", "use the device-code flow (headless / no local browser)", false)
+    .option("--issuer <url>", "OIDC issuer (default https://login.reqport.com/auth/open or QP_ISSUER)")
+    .option("--client-id <id>", "OAuth client_id (default QP_OAUTH_CLIENT_ID)")
+    .option("--scope <scopes>", "OAuth scopes (default: openid profile email offline_access)")
+    .action((opts) =>
+      wrap(async () => {
+        const { runLogin } = await import("./commands/login.js");
+        return runLogin({
+          device: opts.device,
+          issuer: opts.issuer,
+          clientId: opts.clientId,
+          scope: opts.scope,
+          json: globalJson(),
+        });
+      })()
+    );
+
+  program
+    .command("logout")
+    .description("Clear the stored login")
+    .action(() =>
+      wrap(async () => {
+        const { runLogout } = await import("./commands/login.js");
+        return runLogout(globalJson());
+      })()
+    );
+
+  program
+    .command("whoami")
+    .description("Show the stored login (issuer, client, expiry)")
+    .action(() =>
+      wrap(async () => {
+        const { runWhoami } = await import("./commands/login.js");
+        return runWhoami(globalJson());
+      })()
+    );
 
   // ── requests ─────────────────────────────────────────────────────────────
   const requests = program.command("requests").description("Discover and read requests");
@@ -110,7 +151,7 @@ async function main(): Promise<void> {
   // ── doctor ────────────────────────────────────────────────────────────────
   program
     .command("doctor")
-    .description("Verify env wiring, attestation, and API-key auth")
+    .description("Verify env wiring, attestation, and credential auth")
     .action(() =>
       wrap(async () => {
         const { runDoctor } = await import("./commands/doctor.js");
@@ -121,7 +162,7 @@ async function main(): Promise<void> {
   // ── keys ──────────────────────────────────────────────────────────────────
   const keys = program
     .command("keys")
-    .description("Report the API key in use (management is portal-only)")
+    .description("Manage API keys (create/list/revoke need `qp login`; status is read-only)")
     .action(() =>
       wrap(async () => {
         const { runKeysStatus } = await import("./commands/keys.js");
@@ -130,11 +171,50 @@ async function main(): Promise<void> {
     );
   keys
     .command("status")
-    .description("Show the current key (masked) and whether it authenticates")
+    .description("Show the active credential and whether it authenticates")
     .action(() =>
       wrap(async () => {
         const { runKeysStatus } = await import("./commands/keys.js");
         return runKeysStatus(globalEnv(), globalJson());
+      })()
+    );
+  keys
+    .command("create")
+    .description("Mint a new rqk_live_ key (requires `qp login` + ORG_ADMIN)")
+    .option("-n, --name <name>", "display name for the key (required)")
+    .option(
+      "--scopes <csv>",
+      "comma-separated scopes",
+      "payloads:read,responses:write"
+    )
+    .option("--expires-in-days <n>", "optional expiry in days", (v) => parseInt(v, 10))
+    .action((opts) =>
+      wrap(async () => {
+        const { runKeysCreate } = await import("./commands/keys.js");
+        return runKeysCreate(globalEnv(), {
+          name: opts.name,
+          scopes: opts.scopes,
+          expiresInDays: opts.expiresInDays,
+          json: globalJson(),
+        });
+      })()
+    );
+  keys
+    .command("list")
+    .description("List the org's API keys (metadata only)")
+    .action(() =>
+      wrap(async () => {
+        const { runKeysList } = await import("./commands/keys.js");
+        return runKeysList(globalEnv(), globalJson());
+      })()
+    );
+  keys
+    .command("revoke <keyId>")
+    .description("Revoke an API key")
+    .action((keyId) =>
+      wrap(async () => {
+        const { runKeysRevoke } = await import("./commands/keys.js");
+        return runKeysRevoke(globalEnv(), keyId, globalJson());
       })()
     );
 

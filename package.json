@@ -14,7 +14,7 @@
   "private": true,
   "type": "module",
   "bin": {
-    "reqport": "dist/index.js"
+    "qp": "dist/index.js"
   },
   "files": [
     "dist",

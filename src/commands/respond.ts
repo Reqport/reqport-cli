@@ -6,7 +6,8 @@
 
 import { createInterface } from "node:readline/promises";
 import { ReqportClient } from "../client.js";
-import { requireApiKey, type ReqportEnv } from "../env.js";
+import { type ReqportEnv } from "../env.js";
+import { requireResponderCredential } from "../auth/session.js";
 import {
   isBusinessRelationship,
   parseAccountArg,
@@ -34,7 +35,7 @@ export async function runRespond(
   id: string,
   opts: RespondCliOptions
 ): Promise<number> {
-  const client = new ReqportClient({ env, apiKey: requireApiKey() });
+  const client = new ReqportClient({ env, credential: await requireResponderCredential() });
 
   // Parse inputs up front so bad args fail before any network call.
   let hasRelationship: boolean | undefined;
@@ -113,7 +114,7 @@ export async function runRespond(
   line(`Submitted via /v1/requests/{id}/${outcome.endpoint}`);
   line(`  result status: ${outcome.result.status ?? "(ok)"}`);
   if (outcome.result.messageId) line(`  message id:    ${outcome.result.messageId}`);
-  line("Verify:  reqport requests show " + id);
+  line("Verify:  qp requests show " + id);
   return 0;
 }
 

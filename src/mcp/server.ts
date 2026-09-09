@@ -39,9 +39,18 @@ const accountSchema = z
   })
   .describe("A typed instrument disclosed with a substantive answer.");
 
+/**
+ * The MCP server is API-key-only by design: an agent cannot complete an
+ * interactive browser login, so `qp login` is a human/CLI-only concern. Set
+ * REQPORT_API_KEY in the MCP server's env.
+ */
 function clientFor(env?: string): ReqportClient {
   const resolved: ReqportEnv = resolveEnv(env);
-  return new ReqportClient({ env: resolved, apiKey: readApiKey() });
+  const key = readApiKey();
+  return new ReqportClient({
+    env: resolved,
+    credential: key ? { value: key, kind: "apikey" } : undefined,
+  });
 }
 
 function ok(value: unknown) {

@@ -1,21 +1,29 @@
 /**
- * ReqportClient — a thin HTTP client over the Vanta responder API.
+ * ReqportClient — a thin HTTP client over the Vanta responder + key-management
+ * API.
  *
  * Spike finding (see README / SKILL): the responder loop is SERVER-ASSISTED.
  * Reads (`decrypt-batch`) return plaintext decrypted inside the TEE, and the
  * business-relationship answer is sealed server-side. So this client is pure
- * HTTP + the API key — no Model-1 dual-JWE, device key, or DPoP needed for the
- * business-relationship responder loop.
+ * HTTP + a bearer credential — no Model-1 dual-JWE, device key, or DPoP.
  *
- * Uses the Node 18+ global `fetch` (no HTTP dependency). Never logs the key.
+ * A credential is either an `rqk_live_` API key (MACHINE) or a Signicat user
+ * JWT (HUMAN, from `qp login`). Both go on the wire as `Authorization: Bearer`.
+ * Key management (create/list/revoke) requires the JWT — an API key cannot mint
+ * keys.
+ *
+ * Uses the Node 18+ global `fetch` (no HTTP dependency). Never logs the secret.
  */
 
 import { randomUUID } from "node:crypto";
 import { baseUrlFor, type ReqportEnv } from "./env.js";
 import type {
   AffordanceListResponse,
+  ApiKeyInfo,
   AttestationResponse,
   BusinessRelationshipAnswer,
+  CreateApiKeyRequest,
+  CreateApiKeyResponse,
   DecryptBatchResponse,
   PayloadMetaResponse,
   ResponseResult,
@@ -23,10 +31,16 @@ import type {
   WorkflowInstanceResponse,
 } from "./types.js";
 
+/** A resolved bearer credential. */
+export type Credential = {
+  value: string;
+  kind: "apikey" | "jwt";
+};
+
 export type ReqportClientOptions = {
   env: ReqportEnv;
-  /** rqk_live_ key. Optional: attestation is unauthenticated. */
-  apiKey?: string;
+  /** Bearer credential. Optional: attestation is (nominally) unauthenticated. */
+  credential?: Credential;
 };
 
 /** A structured API error carrying the HTTP status and any server error body. */
@@ -46,12 +60,19 @@ export class ReqportApiError extends Error {
 export class ReqportClient {
   readonly env: ReqportEnv;
   readonly baseUrl: string;
-  private readonly apiKey?: string;
+  private readonly credential?: Credential;
 
   constructor(opts: ReqportClientOptions) {
     this.env = opts.env;
     this.baseUrl = baseUrlFor(opts.env);
-    this.apiKey = opts.apiKey;
+    this.credential = opts.credential;
+  }
+
+  get hasCredential(): boolean {
+    return Boolean(this.credential);
+  }
+  get credentialKind(): Credential["kind"] | undefined {
+    return this.credential?.kind;
   }
 
   private url(path: string): string {
@@ -60,21 +81,31 @@ export class ReqportClient {
 
   private async request<T>(
     path: string,
-    init: RequestInit & { auth?: boolean; idempotent?: boolean } = {}
+    init: RequestInit & {
+      auth?: boolean;
+      idempotent?: boolean;
+      /** Require a JWT (human) credential — key management cannot use an API key. */
+      requireJwt?: boolean;
+    } = {}
   ): Promise<T> {
-    const { auth = true, idempotent = false, headers, ...rest } = init;
+    const { auth = true, idempotent = false, requireJwt = false, headers, ...rest } = init;
     const h: Record<string, string> = {
       Accept: "application/json",
       ...(headers as Record<string, string> | undefined),
     };
     if (rest.body !== undefined) h["Content-Type"] = "application/json";
-    if (auth) {
-      if (!this.apiKey) {
+    if (auth || requireJwt) {
+      if (!this.credential) {
         throw new Error(
-          "This operation requires REQPORT_API_KEY (rqk_live_...). See `reqport doctor`."
+          "This operation requires authentication. Set REQPORT_API_KEY or run `qp login`."
         );
       }
-      h["Authorization"] = `Bearer ${this.apiKey}`;
+      if (requireJwt && this.credential.kind !== "jwt") {
+        throw new Error(
+          "Key management requires a human login (ORG_ADMIN). Run `qp login` — an API key cannot mint or manage keys."
+        );
+      }
+      h["Authorization"] = `Bearer ${this.credential.value}`;
     }
     if (idempotent) h["Idempotency-Key"] = randomUUID();
 
@@ -101,14 +132,15 @@ export class ReqportClient {
   /**
    * GET /v1/attestation — MAA hardware-attestation evidence. Documented as
    * public, but sandbox's Spring Security chain currently gates it behind a
-   * Bearer token (WWW-Authenticate: Bearer), so we attach the key when present.
-   * The endpoint ignores auth where it is truly public, so sending it is safe.
+   * Bearer token (WWW-Authenticate: Bearer), so we attach the credential when
+   * present. The endpoint ignores auth where it is truly public, so sending it
+   * is safe.
    */
   attestation(nonce?: string): Promise<AttestationResponse> {
     const q = nonce ? `?nonce=${encodeURIComponent(nonce)}` : "";
     return this.request<AttestationResponse>(`/v1/attestation${q}`, {
       method: "GET",
-      auth: Boolean(this.apiKey),
+      auth: this.hasCredential,
     });
   }
 
@@ -116,8 +148,7 @@ export class ReqportClient {
 
   /**
    * GET /v1/affordances — open traversals addressed to the caller's org
-   * (responder discovery). `mine: true` switches to /v1/affordances/mine
-   * (the caller org's own edges).
+   * (responder discovery). `mine: true` switches to /v1/affordances/mine.
    */
   listAffordances(params?: {
     state?: string;
@@ -163,8 +194,7 @@ export class ReqportClient {
   /**
    * POST /v1/payloads/decrypt-batch — the TEE mints a capability, downloads the
    * ciphertext, decrypts it, and returns base64 plaintext to an authorized
-   * caller (scope payloads:read, and the key's org must be a party to the
-   * workflow). Max 20 payloadIds per call.
+   * caller (scope payloads:read). Max 20 payloadIds per call.
    */
   decryptBatch(payloadIds: string[]): Promise<DecryptBatchResponse> {
     if (payloadIds.length === 0) return Promise.resolve({ items: [] });
@@ -209,6 +239,41 @@ export class ReqportClient {
     return this.request<ResponseResult>(
       `/v1/requests/${encodeURIComponent(id)}/response`,
       { method: "POST", idempotent: true, body: JSON.stringify(submission) }
+    );
+  }
+
+  // ── Key management (HUMAN JWT + ORG_ADMIN only) ────────────────────────────
+
+  /**
+   * POST /v1/orgs/me/api-keys — mint a new rqk_live_ key for the caller's org.
+   * The cleartext key is returned ONCE. Requires a Signicat user JWT and
+   * ORG_ADMIN (verified server-side via Consortium). An API key cannot call this.
+   */
+  createApiKey(req: CreateApiKeyRequest): Promise<CreateApiKeyResponse> {
+    return this.request<CreateApiKeyResponse>(`/v1/orgs/me/api-keys`, {
+      method: "POST",
+      requireJwt: true,
+      body: JSON.stringify({
+        displayName: req.displayName,
+        scopes: req.scopes ?? [],
+        expiresInDays: req.expiresInDays ?? null,
+      }),
+    });
+  }
+
+  /** GET /v1/orgs/me/api-keys — list the org's keys (metadata only). */
+  listApiKeys(): Promise<ApiKeyInfo[]> {
+    return this.request<ApiKeyInfo[]>(`/v1/orgs/me/api-keys`, {
+      method: "GET",
+      requireJwt: true,
+    });
+  }
+
+  /** DELETE /v1/orgs/me/api-keys/{keyId} — revoke a key. */
+  revokeApiKey(keyId: string): Promise<void> {
+    return this.request<void>(
+      `/v1/orgs/me/api-keys/${encodeURIComponent(keyId)}`,
+      { method: "DELETE", requireJwt: true }
     );
   }
 }

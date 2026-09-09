@@ -3,16 +3,16 @@
  */
 
 import { ReqportClient } from "../client.js";
-import { requireApiKey, type ReqportEnv } from "../env.js";
-import { readRequest } from "../core.js";
+import { type ReqportEnv } from "../env.js";
+import { requireResponderCredential } from "../auth/session.js";
+import { isBusinessRelationship, readRequest } from "../core.js";
 import { line, printJson, table } from "../ui.js";
-import { isBusinessRelationship } from "../core.js";
 
 export async function runList(
   env: ReqportEnv,
   opts: { state?: string; type?: string; mine?: boolean; json?: boolean }
 ): Promise<number> {
-  const client = new ReqportClient({ env, apiKey: requireApiKey() });
+  const client = new ReqportClient({ env, credential: await requireResponderCredential() });
   const res = await client.listAffordances({
     state: opts.state ?? "open",
     edgeType: opts.type,
@@ -46,7 +46,7 @@ export async function runList(
   }
   line(table(["REQUEST ID", "TYPE", "STATE", "CREATED"], rows));
   line("");
-  line(`${res.total} request(s). Read one:  reqport requests show <REQUEST ID>`);
+  line(`${res.total} request(s). Read one:  qp requests show <REQUEST ID>`);
   return 0;
 }
 
@@ -55,7 +55,7 @@ export async function runShow(
   id: string,
   opts: { json?: boolean }
 ): Promise<number> {
-  const client = new ReqportClient({ env, apiKey: requireApiKey() });
+  const client = new ReqportClient({ env, credential: await requireResponderCredential() });
   const detail = await readRequest(client, id);
 
   if (opts.json) {
@@ -88,12 +88,12 @@ export async function runShow(
   line("");
   if (isBusinessRelationship(wf.workflowType)) {
     line("Answer it:");
-    line(`  reqport respond ${id} --has-relationship false          # no such customer (auth.002 NFOU)`);
-    line(`  reqport respond ${id} --has-relationship true --account ACCOUNT:SE1234567890:IBAN:Main`);
+    line(`  qp respond ${id} --has-relationship false          # no such customer (auth.002 NFOU)`);
+    line(`  qp respond ${id} --has-relationship true --account ACCOUNT:SE1234567890:IBAN:Main`);
   } else {
     line("Answer it:");
-    line(`  reqport respond ${id} --status NFOU`);
-    line(`  reqport respond ${id} --status COMP --free-text "…"`);
+    line(`  qp respond ${id} --status NFOU`);
+    line(`  qp respond ${id} --status COMP --free-text "…"`);
   }
   return 0;
 }

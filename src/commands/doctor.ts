@@ -1,29 +1,33 @@
 /**
- * `reqport doctor` — verify environment wiring, attestation, and key auth.
+ * `qp doctor` — verify environment wiring, attestation, and credential auth.
  *
  * - Resolves --env → base URL.
- * - GET /v1/attestation (unauthenticated) to confirm reachability + TEE
- *   attestation posture.
- * - If a key is present, probes GET /v1/affordances to confirm the key
- *   authenticates and can read.
+ * - GET /v1/attestation to confirm reachability + TEE attestation posture.
+ * - Resolves the active credential (REQPORT_API_KEY, else a `qp login` JWT) and
+ *   probes GET /v1/affordances to confirm it authenticates.
  */
 
 import { ReqportClient } from "../client.js";
 import { maskKey, readApiKey, type ReqportEnv } from "../env.js";
+import { loginSummary, resolveResponderCredential } from "../auth/session.js";
 import { explainError, line, printJson } from "../ui.js";
 
 export async function runDoctor(env: ReqportEnv, json: boolean): Promise<number> {
   const key = readApiKey();
-  const client = new ReqportClient({ env, apiKey: key });
+  const cred = await resolveResponderCredential();
+  const client = new ReqportClient({ env, credential: cred });
+  const login = loginSummary();
 
   const report: Record<string, unknown> = {
     env,
     baseUrl: client.baseUrl,
-    apiKey: maskKey(key),
+    apiKeyEnv: maskKey(key),
     apiKeyPresent: Boolean(key),
+    login,
+    activeCredential: cred?.kind ?? "none",
   };
 
-  // 1. Attestation (unauth).
+  // 1. Attestation.
   try {
     const att = await client.attestation();
     report.attestation = {
@@ -36,7 +40,7 @@ export async function runDoctor(env: ReqportEnv, json: boolean): Promise<number>
   }
 
   // 2. Authenticated read probe.
-  if (key) {
+  if (cred) {
     try {
       const aff = await client.listAffordances({ state: "open" });
       report.auth = { ok: true, openAffordances: aff.total };
@@ -44,16 +48,18 @@ export async function runDoctor(env: ReqportEnv, json: boolean): Promise<number>
       report.auth = { ok: false, detail: explainError(e) };
     }
   } else {
-    report.auth = { ok: false, detail: "REQPORT_API_KEY not set." };
+    report.auth = { ok: false, detail: "No credential — set REQPORT_API_KEY or run `qp login`." };
   }
 
   if (json) {
     printJson(report);
   } else {
-    line(`Reqport CLI doctor`);
-    line(`  env:        ${env}`);
-    line(`  base URL:   ${client.baseUrl}`);
-    line(`  API key:    ${report.apiKey}`);
+    line(`qp doctor`);
+    line(`  env:         ${env}`);
+    line(`  base URL:    ${client.baseUrl}`);
+    line(`  API key:     ${report.apiKeyEnv}`);
+    line(`  login:       ${login.loggedIn ? `${login.clientId} @ ${login.issuer}` : "not logged in"}`);
+    line(`  active cred: ${report.activeCredential}`);
     const att = report.attestation as { ok: boolean; hasToken?: boolean; detail?: string };
     line(
       `  attestation: ${att.ok ? `OK${att.hasToken ? " (TEE token present)" : " (no token — dev/alpha env)"}` : `FAILED — ${att.detail}`}`
