@@ -20,7 +20,7 @@ async function main(): Promise<void> {
     .name("qp")
     .description(
       "Answer Reqport data requests (e.g. Engagemangskontroll / business-relationship checks).\n" +
-        "Automation: set REQPORT_API_KEY (rqk_live_). Humans: run `qp login`, then `qp keys create`.\n" +
+        "Automation: set REQPORT_API_KEY (rqk_live_). Humans: run `qp login` to pair with the console.\n" +
         "Content is decrypted server-side in the TEE — no client crypto needed."
     )
     .version(VERSION)
@@ -45,21 +45,16 @@ async function main(): Promise<void> {
   // ── login / logout / whoami ────────────────────────────────────────────────
   program
     .command("login")
-    .description("Sign in via Signicat to mint your own API keys (device flow — no callback)")
-    .option("--loopback", "use the auth-code + PKCE loopback flow (NON-PROD; needs a 127.0.0.1 redirect)", false)
-    .option("--issuer <url>", "OIDC issuer (default https://login.reqport.com/auth/open or QP_ISSUER)")
-    .option("--client-id <id>", "OAuth client_id (default QP_OAUTH_CLIENT_ID)")
-    .option("--scope <scopes>", "OAuth scopes (default: openid profile email offline_access)")
-    .option("--acr <values>", "acr_values (default idp:otp-email or QP_OAUTH_ACR; \"\" to omit)")
+    .description("Pair with the Reqport console (browser) to receive an API key — no callback, no OAuth client")
+    .option("--portal-url <url>", "portal base URL (default https://reqport.com or QP_PORTAL_URL)")
+    .option("--name <keyName>", "requested display name for the minted key")
     .action((opts) =>
       wrap(async () => {
         const { runLogin } = await import("./commands/login.js");
         return runLogin({
-          loopback: opts.loopback,
-          issuer: opts.issuer,
-          clientId: opts.clientId,
-          scope: opts.scope,
-          acr: opts.acr,
+          env: globalEnv(),
+          portalUrl: opts.portalUrl,
+          name: opts.name,
           json: globalJson(),
         });
       })()
@@ -77,7 +72,7 @@ async function main(): Promise<void> {
 
   program
     .command("whoami")
-    .description("Show the stored login (issuer, client, expiry)")
+    .description("Show the stored login (env, key id, scopes) — local only")
     .action(() =>
       wrap(async () => {
         const { runWhoami } = await import("./commands/login.js");
@@ -164,7 +159,7 @@ async function main(): Promise<void> {
   // ── keys ──────────────────────────────────────────────────────────────────
   const keys = program
     .command("keys")
-    .description("Manage API keys (create/list/revoke need `qp login`; status is read-only)")
+    .description("Show the active credential (status); key management lives in the console")
     .action(() =>
       wrap(async () => {
         const { runKeysStatus } = await import("./commands/keys.js");
@@ -173,52 +168,27 @@ async function main(): Promise<void> {
     );
   keys
     .command("status")
-    .description("Show the active credential and whether it authenticates")
+    .description("Show the active credential's metadata (local only)")
     .action(() =>
       wrap(async () => {
         const { runKeysStatus } = await import("./commands/keys.js");
         return runKeysStatus(globalEnv(), globalJson());
       })()
     );
-  keys
-    .command("create")
-    .description("Mint a new rqk_live_ key (requires `qp login` + ORG_ADMIN)")
-    .option("-n, --name <name>", "display name for the key (required)")
-    .option(
-      "--scopes <csv>",
-      "comma-separated scopes",
-      "payloads:read,responses:write"
-    )
-    .option("--expires-in-days <n>", "optional expiry in days", (v) => parseInt(v, 10))
-    .action((opts) =>
-      wrap(async () => {
-        const { runKeysCreate } = await import("./commands/keys.js");
-        return runKeysCreate(globalEnv(), {
-          name: opts.name,
-          scopes: opts.scopes,
-          expiresInDays: opts.expiresInDays,
-          json: globalJson(),
-        });
-      })()
-    );
-  keys
-    .command("list")
-    .description("List the org's API keys (metadata only)")
-    .action(() =>
-      wrap(async () => {
-        const { runKeysList } = await import("./commands/keys.js");
-        return runKeysList(globalEnv(), globalJson());
-      })()
-    );
-  keys
-    .command("revoke <keyId>")
-    .description("Revoke an API key")
-    .action((keyId) =>
-      wrap(async () => {
-        const { runKeysRevoke } = await import("./commands/keys.js");
-        return runKeysRevoke(globalEnv(), keyId, globalJson());
-      })()
-    );
+  // create/list/revoke are console-managed under portal-pairing (the CLI holds an
+  // API key, which cannot call Vanta's HUMAN-only key-management endpoints).
+  for (const action of ["create", "list", "revoke"] as const) {
+    keys
+      .command(action)
+      .description(`Manage keys in the developer console (${action} is not a CLI operation)`)
+      .allowUnknownOption(true)
+      .action(() =>
+        wrap(async () => {
+          const { runKeysConsoleGuidance } = await import("./commands/keys.js");
+          return runKeysConsoleGuidance(action, globalJson());
+        })()
+      );
+  }
 
   // ── mcp ──────────────────────────────────────────────────────────────────
   program

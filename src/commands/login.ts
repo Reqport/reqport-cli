@@ -1,58 +1,70 @@
 /**
- * `qp login` / `qp logout` — human authentication via Signicat.
+ * `qp login` / `qp logout` / `qp whoami` — portal-pairing authentication.
  *
- * Auth happens entirely in the browser (or on a second device for --device);
- * the CLI never sees the user's password. On success, tokens are stored so
- * `qp keys create` and the responder commands can use the JWT.
+ * `qp login` opens the Reqport console's CLI-auth page (which reuses the portal's
+ * existing Signicat session — no new OAuth client, no device flow, no localhost
+ * callback), the human approves, and the portal mints + relays an rqk_live_ key
+ * back to the CLI. The key is stored as the active credential.
  */
 
-import { performLogin, logout, loginSummary } from "../auth/session.js";
-import { resolveOidcConfig } from "../auth/oidc.js";
+import type { ReqportEnv } from "../env.js";
+import { maskKey } from "../env.js";
+import { isLoggedIn, logout, loginSummary } from "../auth/session.js";
+import { DEFAULT_PORTAL_URL, runPairing } from "../auth/pairing.js";
+import { saveCredential } from "../auth/store.js";
 import { err, line, printJson } from "../ui.js";
 
+function resolvePortalUrl(flag?: string): string {
+  const v = flag || process.env.QP_PORTAL_URL || DEFAULT_PORTAL_URL;
+  return v.replace(/\/$/, "");
+}
+
 export async function runLogin(opts: {
-  loopback?: boolean;
-  issuer?: string;
-  clientId?: string;
-  scope?: string;
-  acr?: string;
+  env: ReqportEnv;
+  portalUrl?: string;
+  name?: string;
   json?: boolean;
 }): Promise<number> {
-  const cfg = resolveOidcConfig({
-    issuer: opts.issuer,
-    clientId: opts.clientId,
-    scope: opts.scope,
-    acr: opts.acr,
-  });
-  if (!cfg.clientId) {
-    const msg =
-      "No OAuth client_id configured. Set QP_OAUTH_CLIENT_ID (or pass --client-id).\n" +
-      "A PUBLIC, no-callback DEVICE-FLOW `qp` client must be registered in the authority tenant\n" +
-      "login.reqport.com/auth/open: client type=public, token_endpoint_auth_method=none,\n" +
-      "grants=device_code+refresh_token, PKCE S256, NO redirect URIs, scopes=openid profile email\n" +
-      "offline_access, acr_values=idp:otp-email.\n" +
-      "See the 'Signicat client registration' section of the README for the full spec.";
-    if (opts.json) printJson({ ok: false, reason: "no_client_id", issuer: cfg.issuer });
-    else err(msg);
-    return 1;
-  }
+  const portalUrl = resolvePortalUrl(opts.portalUrl);
+  const locale = process.env.QP_LOCALE || "en";
 
-  const progress = (m: string) => err(m); // progress → stderr so --json stdout stays clean
-  const result = await performLogin(
-    { loopback: opts.loopback, issuer: opts.issuer, clientId: opts.clientId, scope: opts.scope, acr: opts.acr },
+  const progress = (m: string) => err(m); // → stderr so --json stdout stays clean
+  const result = await runPairing(
+    { portalUrl, env: opts.env, name: opts.name, locale },
     progress
   );
 
+  const env = (result.env as ReqportEnv) ?? opts.env;
+  saveCredential({
+    value: result.apiKey,
+    kind: "apikey",
+    env,
+    keyId: result.keyId,
+    scopes: result.scopes,
+    expiresAt: result.expiresAt ?? null,
+    portalUrl,
+    savedAt: Date.now(),
+  });
+
   if (opts.json) {
-    printJson({ ok: true, ...result });
+    printJson({
+      ok: true,
+      env,
+      keyId: result.keyId ?? null,
+      scopes: result.scopes ?? [],
+      expiresAt: result.expiresAt ?? null,
+      apiKey: maskKey(result.apiKey),
+    });
   } else {
     line("");
-    line(`Logged in to ${result.issuer} (${result.mode} flow)`);
-    line(`  client:  ${result.clientId}`);
-    line(`  scopes:  ${result.scope}`);
-    line(`  expires: ${new Date(result.expiresAt).toISOString()}`);
+    line(`Paired with ${portalUrl} — key stored as the active credential.`);
+    line(`  env:     ${env}`);
+    if (result.keyId) line(`  key id:  ${result.keyId}`);
+    if (result.scopes?.length) line(`  scopes:  ${result.scopes.join(", ")}`);
+    if (result.expiresAt) line(`  expires: ${result.expiresAt}`);
+    line(`  key:     ${maskKey(result.apiKey)}`);
     line("");
-    line("Now mint a key:  qp keys create --env sandbox --name my-integration --scopes payloads:read,responses:write");
+    line(`Try it:  qp --env ${env} doctor`);
   }
   return 0;
 }
@@ -60,19 +72,23 @@ export async function runLogin(opts: {
 export function runLogout(json: boolean): number {
   const cleared = logout();
   if (json) printJson({ ok: true, cleared });
-  else line(cleared ? "Logged out (tokens cleared)." : "No stored session to clear.");
+  else line(cleared ? "Logged out (stored key cleared)." : "No stored login to clear.");
   return 0;
 }
 
 export function runWhoami(json: boolean): number {
   const summary = loginSummary();
-  if (json) printJson(summary);
-  else if (!summary.loggedIn) line("Not logged in. Run `qp login`.");
-  else {
-    line(`Logged in to ${summary.issuer}`);
-    line(`  client:  ${summary.clientId}`);
-    line(`  scopes:  ${summary.scope}`);
-    line(`  expires: ${summary.expiresAt}${summary.expired ? " (EXPIRED — will refresh on next use)" : ""}`);
+  if (json) {
+    printJson(summary);
+  } else if (!isLoggedIn()) {
+    line("Not logged in. Run `qp login` (or set REQPORT_API_KEY for automation).");
+  } else {
+    line(`Logged in (paired key)`);
+    line(`  env:     ${summary.env}`);
+    line(`  key id:  ${summary.keyId ?? "(unknown)"}`);
+    line(`  scopes:  ${(summary.scopes as string[]).join(", ") || "(none reported)"}`);
+    if (summary.expiresAt) line(`  expires: ${summary.expiresAt}`);
+    if (summary.portalUrl) line(`  portal:  ${summary.portalUrl}`);
   }
-  return summary.loggedIn ? 0 : 1;
+  return isLoggedIn() ? 0 : 1;
 }

@@ -1,135 +1,34 @@
 /**
- * Session glue: run a login flow and persist tokens; resolve a valid bearer
- * (auto-refreshing on expiry); and resolve the credential the responder
- * commands should use.
+ * Session glue for the portal-pairing model.
  *
  * Credential precedence for responder commands (requests/respond):
  *   1. REQPORT_API_KEY (rqk_live_...)  — agents / CI
- *   2. a stored `qp login` JWT         — humans
- * Key-management commands (keys create/list/revoke) always require the JWT.
+ *   2. the API key stored by `qp login` — humans
+ * Both are `kind:"apikey"` — the responder loop and MCP consume them identically.
  */
 
 import type { Credential } from "../client.js";
 import { readApiKey } from "../env.js";
-import {
-  discover,
-  loginAuthCode,
-  loginDeviceCode,
-  refresh,
-  resolveOidcConfig,
-  type LoginProgress,
-  type OidcConfig,
-  type TokenResponse,
-} from "./oidc.js";
-import { clearTokens, loadTokens, saveTokens, type StoredTokens } from "./store.js";
+import { clearCredential, loadCredential } from "./store.js";
 
-/** Which stored token qp sends to Vanta. Access token by default. */
-function bearerSource(): "access_token" | "id_token" {
-  return process.env.QP_JWT_SOURCE === "id_token" ? "id_token" : "access_token";
-}
-
-const SKEW_MS = 60_000; // refresh a minute early
-
-function toStored(
-  cfg: OidcConfig,
-  t: TokenResponse,
-  prev?: StoredTokens
-): StoredTokens {
-  const expiresIn = t.expires_in ?? 3600;
-  return {
-    issuer: cfg.issuer,
-    clientId: cfg.clientId,
-    accessToken: t.access_token,
-    idToken: t.id_token ?? prev?.idToken,
-    refreshToken: t.refresh_token ?? prev?.refreshToken,
-    expiresAt: Date.now() + expiresIn * 1000,
-    scope: t.scope ?? prev?.scope,
-    bearerSource: bearerSource(),
-    savedAt: Date.now(),
-  };
-}
-
-export type LoginOptions = {
-  /** Use the loopback auth-code flow (NON-PROD only). Default is the device grant. */
-  loopback?: boolean;
-  issuer?: string;
-  clientId?: string;
-  scope?: string;
-  acr?: string;
-};
-
-/** Run the interactive login flow and persist tokens. Returns a short summary. */
-export async function performLogin(
-  opts: LoginOptions,
-  progress: LoginProgress
-): Promise<{ issuer: string; clientId: string; scope: string; mode: string; expiresAt: number }> {
-  const cfg = resolveOidcConfig({
-    issuer: opts.issuer,
-    clientId: opts.clientId,
-    scope: opts.scope,
-    acr: opts.acr,
-  });
-  const disc = await discover(cfg.issuer);
-  // Device grant is the default (no redirect URI). Loopback is opt-in for local/dev.
-  const tokens = opts.loopback
-    ? await loginAuthCode(cfg, disc, progress)
-    : await loginDeviceCode(cfg, disc, progress);
-  const stored = toStored(cfg, tokens);
-  saveTokens(stored);
-  return {
-    issuer: cfg.issuer,
-    clientId: cfg.clientId,
-    scope: cfg.scope,
-    mode: opts.loopback ? "loopback" : "device",
-    expiresAt: stored.expiresAt,
-  };
+export function isLoggedIn(): boolean {
+  return Boolean(loadCredential());
 }
 
 export function logout(): boolean {
-  return clearTokens();
-}
-
-/** Is there a stored login (regardless of expiry)? */
-export function isLoggedIn(): boolean {
-  return Boolean(loadTokens());
+  return clearCredential();
 }
 
 /**
- * Return a valid bearer JWT string, refreshing if expired. Throws with a
- * `qp login` hint when there is no usable session.
- */
-export async function getValidJwt(): Promise<string> {
-  let t = loadTokens();
-  if (!t) {
-    throw new Error("Not logged in. Run `qp login` first.");
-  }
-  if (Date.now() < t.expiresAt - SKEW_MS) {
-    return chooseBearer(t);
-  }
-  // Expired — try to refresh.
-  if (!t.refreshToken) {
-    throw new Error("Session expired and no refresh token is stored. Run `qp login` again.");
-  }
-  const disc = await discover(t.issuer);
-  const refreshed = await refresh({ clientId: t.clientId }, disc.token_endpoint, t.refreshToken);
-  t = toStored({ issuer: t.issuer, clientId: t.clientId, scope: t.scope ?? "", acr: "" }, refreshed, t);
-  saveTokens(t);
-  return chooseBearer(t);
-}
-
-function chooseBearer(t: StoredTokens): string {
-  if (t.bearerSource === "id_token" && t.idToken) return t.idToken;
-  return t.accessToken;
-}
-
-/**
- * Credential for responder commands: API key if set, else a logged-in JWT,
- * else undefined (caller decides whether to error).
+ * Credential for responder commands: REQPORT_API_KEY if set, else the stored
+ * paired key, else undefined (caller decides whether to error). Async for call-
+ * site stability.
  */
 export async function resolveResponderCredential(): Promise<Credential | undefined> {
   const key = readApiKey();
   if (key) return { value: key, kind: "apikey" };
-  if (isLoggedIn()) return { value: await getValidJwt(), kind: "jwt" };
+  const stored = loadCredential();
+  if (stored) return { value: stored.value, kind: "apikey" };
   return undefined;
 }
 
@@ -138,29 +37,23 @@ export async function requireResponderCredential(): Promise<Credential> {
   const cred = await resolveResponderCredential();
   if (!cred) {
     throw new Error(
-      "No credential. Set REQPORT_API_KEY (rqk_live_...) for automation, or run `qp login` for interactive use."
+      "No credential. Set REQPORT_API_KEY (rqk_live_...) for automation, or run `qp login` to pair with the console."
     );
   }
   return cred;
 }
 
-/** Require a human JWT credential (for key management). */
-export async function requireJwtCredential(): Promise<Credential> {
-  return { value: await getValidJwt(), kind: "jwt" };
-}
-
-/** A short, non-secret description of the active login for status output. */
+/** A non-secret, LOCAL-ONLY description of the stored login for status output. */
 export function loginSummary(): Record<string, unknown> {
-  const t = loadTokens();
-  if (!t) return { loggedIn: false };
+  const c = loadCredential();
+  if (!c) return { loggedIn: false };
   return {
     loggedIn: true,
-    issuer: t.issuer,
-    clientId: t.clientId,
-    scope: t.scope,
-    bearerSource: t.bearerSource,
-    expiresAt: new Date(t.expiresAt).toISOString(),
-    expired: Date.now() >= t.expiresAt,
-    hasRefreshToken: Boolean(t.refreshToken),
+    env: c.env,
+    keyId: c.keyId ?? null,
+    scopes: c.scopes ?? [],
+    expiresAt: c.expiresAt ?? null,
+    portalUrl: c.portalUrl ?? null,
+    savedAt: new Date(c.savedAt).toISOString(),
   };
 }

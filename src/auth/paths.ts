@@ -21,6 +21,6 @@ export function configDir(): string {
   return join(base, "qp");
 }
 
-export function tokensPath(): string {
-  return join(configDir(), "tokens.json");
+export function credentialPath(): string {
+  return join(configDir(), "credential.json");
 }

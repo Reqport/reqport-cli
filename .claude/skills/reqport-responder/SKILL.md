@@ -39,13 +39,12 @@ the business-relationship loop; do not attempt it here.
 - **Automation (what you should use): an `rqk_live_` API key** in
   **`REQPORT_API_KEY`**. Never hardcode it, never print it, never commit it. The
   CLI never accepts a key as a flag.
-- If you have **no** key: ask the human to either create one on the portal
-  `/developer` page, **or** run `qp login` (Signicat device-flow sign-in — they
-  approve on a Signicat page, no callback) and then
-  `qp keys create --env sandbox --name agent --scopes payloads:read,responses:write`
-  and hand you the cleartext. Minting requires ORG_ADMIN and a human login — an
-  API key cannot mint keys, and you cannot complete an interactive Signicat login
-  yourself.
+- If you have **no** key: ask the human to get one onto the machine — either by
+  running `qp login --env sandbox` (a browser pairing with the console: they
+  approve, and the key is stored as the CLI's credential), or by creating one in
+  the console `/developer` page and exporting it as `REQPORT_API_KEY`. Key
+  management (create/list/revoke) is console-only — an API key cannot mint keys,
+  and you cannot complete an interactive console pairing yourself.
 - Target env with `--env sandbox|uat|prod` (default `sandbox`). **Use `sandbox`.**
   Never touch `prod`.
 

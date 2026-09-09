@@ -3,18 +3,18 @@
 A publishable `npx` CLI (binary: **`qp`**) **and** bundled **MCP server** for
 Reqport **responders** — the data-holder side. Discover the requests addressed to
 your organisation, read them, and answer them (e.g. **Engagemangskontroll** /
-business-relationship checks as ISO 20022 **auth.002**). Humans can also sign in
-with Signicat (device flow — no callback) and mint their own API keys — no portal
-round-trip.
+business-relationship checks as ISO 20022 **auth.002**). Humans can pair the CLI
+with the Reqport console (`qp login`) to receive an API key without copy-pasting
+from a web page.
 
 ```bash
 # Automation (agents / CI): use an API key
 export REQPORT_API_KEY="rqk_live_..."          # PowerShell: $env:REQPORT_API_KEY="..."
 npx @reqport/cli --env sandbox doctor          # the bin is `qp`
 
-# Humans: log in (device flow — approve on a Signicat page, no callback) and mint a key
-qp login
-qp keys create --env sandbox --name my-integration --scopes payloads:read,responses:write
+# Humans: pair with the console — a browser opens, you approve, the key returns here
+qp login --env sandbox
+qp --env sandbox doctor
 ```
 
 > The package is `@reqport/cli`; the single binary it installs is **`qp`**, so
@@ -23,11 +23,11 @@ qp keys create --env sandbox --name my-integration --scopes payloads:read,respon
 ## Why it's thin (the content-blind model)
 
 Reqport stores only ciphertext, but the **responder loop is server-assisted**, so
-this CLI is just HTTP + a bearer credential — **no client-side crypto**:
+this CLI is just HTTP + an API key — **no client-side crypto**:
 
 | Step | Endpoint | Who decrypts / seals |
 |------|----------|----------------------|
-| Read a request | `POST /v1/payloads/decrypt-batch` | The **TEE** decrypts in-enclave and returns plaintext to your authorized credential |
+| Read a request | `POST /v1/payloads/decrypt-batch` | The **TEE** decrypts in-enclave and returns plaintext to your authorized key |
 | Answer (yes/no + accounts) | `POST /v1/requests/{id}/business-relationship-response` | The **TEE** seals the answer server-side |
 
 No Model-1 dual-JWE, device keys, or DPoP are needed for this loop. (Uploading a
@@ -35,26 +35,27 @@ No Model-1 dual-JWE, device keys, or DPoP are needed for this loop. (Uploading a
 flow that would require client-side encryption; it is intentionally not
 implemented here.)
 
-## Credentials — two ways to authenticate
+## Credentials
 
-- **API key (`rqk_live_...`)** — for automation. Read from **`REQPORT_API_KEY`**
-  at runtime only; never a flag, never logged. Needs scopes **`payloads:read`** +
-  **`responses:write`** for the responder loop.
-- **Human login (`qp login`)** — a Signicat sign-in via the **device
-  authorization grant** (the default): the CLI prints a verification URL, you
-  approve on that Signicat page (email-OTP), and no redirect/callback is used.
-  Used to **mint keys** (`qp keys create/list/revoke`, which require ORG_ADMIN and
-  cannot be done with an API key) and, as a convenience, to run the responder
-  commands when `REQPORT_API_KEY` is unset. (`--loopback` selects an auth-code +
-  PKCE flow for local/dev clients that have a 127.0.0.1 redirect; not for prod.)
+The CLI authenticates with an **`rqk_live_` API key** on every call. Two ways to
+get one onto a machine:
 
-Precedence for `requests` / `respond`: `REQPORT_API_KEY` first, else a stored
-login. **Agents/CI should always use `REQPORT_API_KEY`.**
+- **Set `REQPORT_API_KEY`** — for automation (agents / CI). Read at runtime only;
+  never a flag, never logged. Needs scopes **`payloads:read`** + **`responses:write`**
+  for the responder loop.
+- **`qp login`** (portal pairing) — for humans. A browser opens the Reqport
+  console's CLI-auth page (which reuses your existing console session), you match
+  a short confirmation code and approve, and the console mints a key and relays it
+  back to the terminal, where it's stored as the active credential. **No new OAuth
+  client, no device flow, no localhost callback, no password ever seen by the CLI.**
 
-Tokens are stored at **`%APPDATA%\qp\tokens.json`** (Windows) or
-**`$XDG_CONFIG_HOME/qp/tokens.json`** → `~/.config/qp/tokens.json` (macOS/Linux),
-written `0600` (best-effort on Windows). The CLI **never** sees your password —
-auth happens on the Signicat page. `qp logout` clears the file.
+Precedence for `requests` / `respond`: `REQPORT_API_KEY` first, else the stored
+paired key. **Agents/CI should always use `REQPORT_API_KEY`.**
+
+The stored key lives at **`%APPDATA%\qp\credential.json`** (Windows) or
+**`$XDG_CONFIG_HOME/qp/credential.json`** → `~/.config/qp/credential.json`
+(macOS/Linux), written `0600` (best-effort on Windows). `qp logout` clears it;
+`qp whoami` shows its env / key id / scopes (local only).
 
 ## Environments
 
@@ -64,35 +65,41 @@ auth happens on the Signicat page. `qp logout` clears the file.
 - `uat` → `https://vanta.dev-uat.reqport.com/vanta`
 - `prod` → `https://vanta.reqport.com/vanta`
 
-The Signicat JWT is portable across clusters (same issuer), so `qp login` once
-and `qp keys create --env <any>`.
-
 ## Commands
 
 | Command | What it does |
 |---------|--------------|
-| `qp login [--loopback] [--issuer] [--client-id] [--scope] [--acr]` | Sign in via Signicat (device flow by default; `--loopback` for local dev) |
-| `qp logout` / `qp whoami` | Clear / show the stored login |
+| `qp login [--env] [--portal-url <url>] [--name <keyName>]` | Pair with the console; receive + store an API key |
+| `qp logout` / `qp whoami` | Clear / show the stored key (local only) |
 | `qp doctor` | Verify base URL, TEE attestation, and that your credential authenticates |
 | `qp requests list [--state open] [--type <t>] [--mine]` | Discover requests via `/v1/affordances` |
 | `qp requests show <id>` | Read one request; decrypts its content in the TEE |
 | `qp respond <id> …` | Answer — auto-detects business-relationship vs generic |
-| `qp keys status` | Show the active credential and whether it authenticates |
-| `qp keys create --name <n> [--scopes csv] [--expires-in-days n]` | Mint an `rqk_live_` key (needs `qp login` + ORG_ADMIN) |
-| `qp keys list` / `qp keys revoke <keyId>` | List / revoke the org's keys |
+| `qp keys status` | Show the active credential's metadata (local only) |
+| `qp keys create\|list\|revoke` | Points you to the console — key management is not a CLI operation |
 | `qp mcp` | Run the stdio MCP server |
 
 Global flags: `--env`, `--json` (machine-readable output on every command).
 
-### Minting a key (human)
+### `qp login` (portal pairing)
 
 ```bash
-qp login                                     # browser sign-in
-qp keys create --env sandbox --name ci-bot --scopes payloads:read,responses:write
-# → prints the rqk_live_ cleartext ONCE; export it as REQPORT_API_KEY
-qp keys list --env sandbox
-qp keys revoke --env sandbox <keyId>
+qp login --env sandbox                          # default portal https://reqport.com
+qp login --env sandbox --portal-url https://sandbox.reqport.com --name my-laptop
 ```
+
+The CLI prints a confirmation code, opens
+`{portalUrl}/{locale}/developer/cli-auth?state=…&challenge=…&env=…`, and polls
+`{portalUrl}/api/developer/cli-auth/poll` until the console relays the key (or you
+Ctrl+C). Override the portal with `--portal-url` / `QP_PORTAL_URL` (e.g. for
+sandbox or aurora); locale via `QP_LOCALE` (default `en`).
+
+### Key management is in the console
+
+Minting, listing, and revoking keys is done by a signed-in human in the developer
+console (`{portalUrl}/{locale}/developer`). The CLI holds only an API key, and
+Vanta's key-management endpoints are HUMAN-only (Signicat + ORG_ADMIN) — an API
+key cannot call them — so `qp keys create|list|revoke` simply point you there.
 
 ### Answering
 
@@ -112,59 +119,27 @@ qp respond <id> --status COMP --free-text "See attached statement." --yes
 repeatable. A `true`/`COMP` answer must disclose at least one account (or a
 pre-sealed `--payload-id`).
 
-## Signicat client registration (external dependency for `qp login`)
+## The `qp login` ↔ portal pairing contract
 
-`qp login` needs a **dedicated PUBLIC, no-callback OAuth client** registered in
-the **production authority tenant** `login.reqport.com/auth/open`. It must live in
-that authority tenant (not UAT): Vanta validates JWTs against this issuer in both
-sandbox and prod, so a UAT-tenant client's tokens would be rejected — and
-repointing sandbox-Vanta at another issuer would break the WP-2 console.
+The portal implements the server half; the CLI implements this half. For reference:
 
-The client uses the **device authorization grant** and therefore needs **no
-redirect URI at all** — this deliberately sidesteps any policy against
-localhost/127.0.0.1 callbacks on production clients. The tenant's discovery doc
-does not yet advertise `token_endpoint_auth_method=none`, so a public client must
-be added. Hand this spec to your Signicat admin:
+1. **CLI** generates a secret `verifier` + random `state`, and
+   `challenge = base64url(SHA256(verifier))`. It prints a confirmation code (the
+   first 8 chars of `state`) and opens
+   `GET {portalUrl}/{locale}/developer/cli-auth?state={state}&challenge={challenge}&env={env}[&name={name}]`.
+2. The **human** (already signed in to the console) verifies the code matches and
+   approves. The portal mints an `rqk_live_` key bound to `state`.
+3. **CLI** polls `POST {portalUrl}/api/developer/cli-auth/poll` with
+   `{state, verifier}` every ~2.5s (5-min timeout, clean Ctrl+C):
+   - `202 {status:"pending"}` → keep polling
+   - `200 {status:"ready", apiKey, keyId, env, scopes, expiresAt}` → store & stop
+   - `403` (verifier mismatch) / `404` (no session) / `410` (expired) → abort with a clear message
+4. CLI stores `{value: apiKey, kind:"apikey", env, keyId, scopes, expiresAt}` as
+   the active credential.
 
-| Field | Value |
-|-------|-------|
-| **Authority / tenant** | `login.reqport.com/auth/open` (production authority — **not** UAT) |
-| **Client type** | **Public** (native/CLI; no client secret) |
-| **`token_endpoint_auth_method`** | **`none`** |
-| **Grant types** | `urn:ietf:params:oauth:grant-type:device_code`, `refresh_token` |
-| **Redirect URIs** | **None** — device flow uses no callback |
-| **PKCE** | `S256` (used on the loopback dev path; harmless to require) |
-| **Device flow** | Enable the device authorization grant (verification URI + user code shown to the user) |
-| **Scopes** | `openid profile email offline_access` (`offline_access` → refresh token) |
-| **`acr_values`** | `idp:otp-email` (email-OTP, mirrors the portal login UX) |
-| **Issued token audience** | Must be accepted by Vanta's `JwtDecoder` (issuer `https://login.reqport.com/auth/open`). If Vanta validates `aud`, include the Vanta audience; otherwise issuer validation suffices. |
-
-> The CLI's `--loopback` mode (auth-code + PKCE with a 127.0.0.1 redirect) is for
-> **local/dev only** and is **not** part of this production client — it would
-> require a localhost callback the prod client intentionally does not have.
-
-**Claims Vanta reads** (verified in `ReqportPrincipalAuthFilter` /
-`ApiKeyController`): the user identity is the JWT **`sub`** (required), and the
-email is **`email`** or, failing that, **`idp_id`** — so the token must carry
-`sub` and one of `email`/`idp_id` (Signicat Email OTP returns email in both when
-`profile email` scopes are requested). **Org is resolved server-side from `sub`**
-(not a JWT claim). Key minting additionally requires the user to be in the
-**`ORG_ADMIN`** group, which Vanta checks live via the Consortium
-`identity/me` — the same JWT is forwarded there, so it must be acceptable to
-Consortium too.
-
-Once registered, point the CLI at it:
-
-```bash
-export QP_OAUTH_CLIENT_ID="<the qp client id>"
-# optional: export QP_ISSUER="https://login.reqport.com/auth/open"
-# optional: export QP_OAUTH_ACR="idp:otp-email"    # default; set "" to omit
-# optional: export QP_JWT_SOURCE=id_token   # if Vanta expects the id_token rather than the access_token
-qp login                       # device flow: prints a URL + code to approve
-```
-
-Until the client is registered, `qp login` fails fast with this guidance and the
-rest of the CLI still works with `REQPORT_API_KEY`.
+The portal authenticates the caller by requiring proof of `verifier` (whose
+SHA-256 it received as `challenge`), so the minted key is only handed to the
+client that started the pairing.
 
 ## MCP server
 
@@ -174,7 +149,7 @@ npx @reqport/cli mcp
 
 A stdio MCP server (official `@modelcontextprotocol/sdk`) exposing the same
 responder operations, built on the same client. **API-key-only by design** — an
-agent cannot complete an interactive Signicat login, so `qp login` is human/CLI
+agent cannot complete an interactive console pairing, so `qp login` is human/CLI
 only. Configure the key in the server env:
 
 ```json
@@ -205,9 +180,9 @@ integration end-to-end against the sandbox:
 >
 > 1. I will export `REQPORT_API_KEY` (an `rqk_live_` sandbox key). Never print,
 >    hardcode, or commit it. Always use `--env sandbox`; never call prod. (If I
->    have not given you a key, ask me to run `qp login && qp keys create --env
->    sandbox --name agent --scopes payloads:read,responses:write` and hand you the
->    cleartext, or to make one on the portal `/developer` page.)
+>    have not given you a key, ask me to run `qp login --env sandbox` — a browser
+>    pairing with the console — or to make one on the console `/developer` page,
+>    and I'll export it for you.)
 > 2. Run `qp --env sandbox doctor` and confirm attestation + auth pass.
 > 3. Run `qp --env sandbox requests list` to find open requests addressed to us.
 >    Sandbox is seeded by a synthetic authority (`reqport-authority-test.com`); if

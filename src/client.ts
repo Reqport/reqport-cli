@@ -19,11 +19,8 @@ import { randomUUID } from "node:crypto";
 import { baseUrlFor, type ReqportEnv } from "./env.js";
 import type {
   AffordanceListResponse,
-  ApiKeyInfo,
   AttestationResponse,
   BusinessRelationshipAnswer,
-  CreateApiKeyRequest,
-  CreateApiKeyResponse,
   DecryptBatchResponse,
   PayloadMetaResponse,
   ResponseResult,
@@ -31,10 +28,10 @@ import type {
   WorkflowInstanceResponse,
 } from "./types.js";
 
-/** A resolved bearer credential. */
+/** A resolved bearer credential (an rqk_live_ API key under the pairing model). */
 export type Credential = {
   value: string;
-  kind: "apikey" | "jwt";
+  kind: "apikey";
 };
 
 export type ReqportClientOptions = {
@@ -84,25 +81,18 @@ export class ReqportClient {
     init: RequestInit & {
       auth?: boolean;
       idempotent?: boolean;
-      /** Require a JWT (human) credential — key management cannot use an API key. */
-      requireJwt?: boolean;
     } = {}
   ): Promise<T> {
-    const { auth = true, idempotent = false, requireJwt = false, headers, ...rest } = init;
+    const { auth = true, idempotent = false, headers, ...rest } = init;
     const h: Record<string, string> = {
       Accept: "application/json",
       ...(headers as Record<string, string> | undefined),
     };
     if (rest.body !== undefined) h["Content-Type"] = "application/json";
-    if (auth || requireJwt) {
+    if (auth) {
       if (!this.credential) {
         throw new Error(
           "This operation requires authentication. Set REQPORT_API_KEY or run `qp login`."
-        );
-      }
-      if (requireJwt && this.credential.kind !== "jwt") {
-        throw new Error(
-          "Key management requires a human login (ORG_ADMIN). Run `qp login` — an API key cannot mint or manage keys."
         );
       }
       h["Authorization"] = `Bearer ${this.credential.value}`;
@@ -239,41 +229,6 @@ export class ReqportClient {
     return this.request<ResponseResult>(
       `/v1/requests/${encodeURIComponent(id)}/response`,
       { method: "POST", idempotent: true, body: JSON.stringify(submission) }
-    );
-  }
-
-  // ── Key management (HUMAN JWT + ORG_ADMIN only) ────────────────────────────
-
-  /**
-   * POST /v1/orgs/me/api-keys — mint a new rqk_live_ key for the caller's org.
-   * The cleartext key is returned ONCE. Requires a Signicat user JWT and
-   * ORG_ADMIN (verified server-side via Consortium). An API key cannot call this.
-   */
-  createApiKey(req: CreateApiKeyRequest): Promise<CreateApiKeyResponse> {
-    return this.request<CreateApiKeyResponse>(`/v1/orgs/me/api-keys`, {
-      method: "POST",
-      requireJwt: true,
-      body: JSON.stringify({
-        displayName: req.displayName,
-        scopes: req.scopes ?? [],
-        expiresInDays: req.expiresInDays ?? null,
-      }),
-    });
-  }
-
-  /** GET /v1/orgs/me/api-keys — list the org's keys (metadata only). */
-  listApiKeys(): Promise<ApiKeyInfo[]> {
-    return this.request<ApiKeyInfo[]>(`/v1/orgs/me/api-keys`, {
-      method: "GET",
-      requireJwt: true,
-    });
-  }
-
-  /** DELETE /v1/orgs/me/api-keys/{keyId} — revoke a key. */
-  revokeApiKey(keyId: string): Promise<void> {
-    return this.request<void>(
-      `/v1/orgs/me/api-keys/${encodeURIComponent(keyId)}`,
-      { method: "DELETE", requireJwt: true }
     );
   }
 }

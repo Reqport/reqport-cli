@@ -125,33 +125,6 @@ export type ResponseResult = {
   [k: string]: unknown;
 };
 
-/** POST /v1/orgs/me/api-keys request. */
-export type CreateApiKeyRequest = {
-  displayName: string;
-  scopes?: string[];
-  expiresInDays?: number;
-};
-
-/** POST /v1/orgs/me/api-keys response — apiKey cleartext is shown ONCE. */
-export type CreateApiKeyResponse = {
-  keyId: string;
-  apiKey: string;
-  displayName: string;
-  scopes: string[];
-  createdAt?: string;
-  expiresAt?: string;
-};
-
-/** GET /v1/orgs/me/api-keys item (metadata only). */
-export type ApiKeyInfo = {
-  keyId: string;
-  displayName: string;
-  scopes: string[];
-  createdAt?: string;
-  revokedAt?: string;
-  expiresAt?: string;
-};
-
 /** A decoded request payload plus the resolved plaintext. */
 export type DecodedPayload = {
   payloadId: string;

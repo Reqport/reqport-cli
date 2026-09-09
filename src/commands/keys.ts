@@ -1,138 +1,71 @@
 /**
- * `qp keys ...` — API-key management.
+ * `qp keys ...` — LOCAL credential view + console guidance.
  *
- *   status                report the credential in use (API key or login)
- *   create --env … …      mint a new rqk_live_ key (requires `qp login` + ORG_ADMIN)
- *   list --env …          list the org's keys (metadata only)
- *   revoke <keyId> --env … revoke a key
+ *   status                 show the active credential's metadata (LOCAL only)
+ *   create | list | revoke  → guidance: manage keys in the console
  *
- * Minting/listing/revoking require a HUMAN Signicat JWT with ORG_ADMIN — an API
- * key cannot manage keys (enforced by Vanta). Get one with `qp login`.
+ * Under portal-pairing the CLI holds only an rqk_live_ API key, and Vanta's key-
+ * management endpoints (POST/GET/DELETE /v1/orgs/me/api-keys) are HUMAN-only
+ * (Signicat JWT + ORG_ADMIN) — an API key cannot call them. So the CLI never
+ * calls those endpoints; it points you at the developer console instead.
  */
 
-import { ReqportClient } from "../client.js";
 import { maskKey, readApiKey, type ReqportEnv } from "../env.js";
-import {
-  loginSummary,
-  requireJwtCredential,
-  resolveResponderCredential,
-} from "../auth/session.js";
-import { explainError, line, printJson, table } from "../ui.js";
+import { loginSummary } from "../auth/session.js";
+import { loadCredential } from "../auth/store.js";
+import { DEFAULT_PORTAL_URL, developerConsoleUrl } from "../auth/pairing.js";
+import { line, printJson } from "../ui.js";
 
-export async function runKeysStatus(env: ReqportEnv, json: boolean): Promise<number> {
+function consoleUrl(): string {
+  const stored = loadCredential();
+  const portal = stored?.portalUrl || process.env.QP_PORTAL_URL || DEFAULT_PORTAL_URL;
+  const locale = process.env.QP_LOCALE || "en";
+  return developerConsoleUrl(portal, locale);
+}
+
+/** LOCAL-only: what credential would be used, from env + stored login. No network. */
+export function runKeysStatus(env: ReqportEnv, json: boolean): number {
   const key = readApiKey();
   const login = loginSummary();
-  const cred = await resolveResponderCredential();
-  const client = new ReqportClient({ env, credential: cred });
-
-  const report: Record<string, unknown> = {
-    env,
-    baseUrl: client.baseUrl,
-    apiKeyEnv: maskKey(key),
-    apiKeyPresent: Boolean(key),
-    login,
-    activeCredential: cred?.kind ?? "none",
-  };
-
-  if (cred) {
-    try {
-      const aff = await client.listAffordances({ state: "open" });
-      report.authenticates = true;
-      report.openAffordances = aff.total;
-    } catch (e) {
-      report.authenticates = false;
-      report.detail = explainError(e);
-    }
-  }
+  const active = key ? "REQPORT_API_KEY (env)" : login.loggedIn ? "stored login" : "none";
 
   if (json) {
-    printJson(report);
+    printJson({
+      env,
+      apiKeyEnv: maskKey(key),
+      apiKeyPresent: Boolean(key),
+      login,
+      activeCredential: active,
+    });
   } else {
-    line(`env:            ${env} (${client.baseUrl})`);
-    line(`REQPORT_API_KEY: ${report.apiKeyEnv}`);
-    line(`login:          ${login.loggedIn ? `${login.clientId} @ ${login.issuer}` : "not logged in"}`);
-    line(`active cred:    ${report.activeCredential}`);
-    if (!cred) {
-      line(`status:         no credential — set REQPORT_API_KEY or run \`qp login\`.`);
-    } else if (report.authenticates) {
-      line(`status:         authenticates OK (${report.openAffordances} open request(s)).`);
+    line(`env:             ${env}`);
+    line(`REQPORT_API_KEY: ${maskKey(key)}`);
+    if (login.loggedIn) {
+      line(`stored login:    key id ${login.keyId ?? "(unknown)"} (env ${login.env}), scopes ${(login.scopes as string[]).join(", ") || "(none)"}`);
     } else {
-      line(`status:         FAILED — ${report.detail}`);
+      line(`stored login:    none`);
     }
+    line(`active credential: ${active}`);
+    line("");
+    line(`(Run \`qp doctor\` to check the active credential against the live API.)`);
   }
-  return cred && report.authenticates ? 0 : 1;
+  return key || login.loggedIn ? 0 : 1;
 }
 
-export async function runKeysCreate(
-  env: ReqportEnv,
-  opts: { name?: string; scopes?: string; expiresInDays?: number; json?: boolean }
-): Promise<number> {
-  if (!opts.name || opts.name.trim() === "") {
-    throw new Error("--name is required (a display name for the key).");
-  }
-  const scopes = (opts.scopes ?? "payloads:read,responses:write")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  const cred = await requireJwtCredential();
-  const client = new ReqportClient({ env, credential: cred });
-  const created = await client.createApiKey({
-    displayName: opts.name.trim(),
-    scopes,
-    expiresInDays: opts.expiresInDays,
-  });
-
-  if (opts.json) {
-    printJson(created);
-  } else {
-    line("");
-    line(`Created key "${created.displayName}" (${created.keyId}) on ${env}.`);
-    line(`  scopes:  ${(created.scopes ?? scopes).join(", ")}`);
-    if (created.expiresAt) line(`  expires: ${created.expiresAt}`);
-    line("");
-    line("Cleartext key (shown ONCE — store it now, it cannot be retrieved again):");
-    line("");
-    line(`  ${created.apiKey}`);
-    line("");
-    line("Use it:  export REQPORT_API_KEY=\"" + "<the key above>" + "\"");
-  }
-  return 0;
-}
-
-export async function runKeysList(env: ReqportEnv, json: boolean): Promise<number> {
-  const cred = await requireJwtCredential();
-  const client = new ReqportClient({ env, credential: cred });
-  const keys = await client.listApiKeys();
-
-  if (json) {
-    printJson(keys);
-    return 0;
-  }
-  if (keys.length === 0) {
-    line(`No API keys on ${env}.`);
-    return 0;
-  }
-  const rows = keys.map((k) => [
-    k.keyId,
-    k.displayName,
-    (k.scopes ?? []).join(" "),
-    k.revokedAt ? "revoked" : "active",
-    k.expiresAt ?? "",
-  ]);
-  line(table(["KEY ID", "NAME", "SCOPES", "STATUS", "EXPIRES"], rows));
-  return 0;
-}
-
-export async function runKeysRevoke(
-  env: ReqportEnv,
-  keyId: string,
+/** create/list/revoke are not CLI operations under pairing — point at the console. */
+export function runKeysConsoleGuidance(
+  action: "create" | "list" | "revoke",
   json: boolean
-): Promise<number> {
-  const cred = await requireJwtCredential();
-  const client = new ReqportClient({ env, credential: cred });
-  await client.revokeApiKey(keyId);
-  if (json) printJson({ ok: true, revoked: keyId });
-  else line(`Revoked key ${keyId} on ${env}.`);
+): number {
+  const url = consoleUrl();
+  const msg =
+    `Key ${action} is managed in the Reqport developer console (a human, signed in):\n  ${url}\n` +
+    `The CLI cannot ${action} keys — Vanta's key-management endpoints require a human login (ORG_ADMIN),\n` +
+    `which an API key does not have. To get a key onto this machine, run \`qp login\`.`;
+  if (json) {
+    printJson({ ok: false, action, reason: "console_only", consoleUrl: url });
+  } else {
+    line(msg);
+  }
   return 0;
 }

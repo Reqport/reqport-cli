@@ -1,46 +1,44 @@
 /**
- * Token storage for `qp login`. A single JSON file in the config dir, written
- * with 0600 permissions (best-effort on Windows). Holds the OAuth tokens and
- * the client/issuer they were minted against so refresh and env-portability
- * work without re-discovery each call. Tokens are NEVER logged.
+ * Credential storage for `qp login` (portal-pairing). A single JSON file in the
+ * config dir, written 0600 (best-effort on Windows). Holds the rqk_live_ API key
+ * the portal minted and relayed to the CLI, plus local-only metadata. The key is
+ * NEVER logged.
  */
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { configDir, tokensPath } from "./paths.js";
+import { configDir, credentialPath } from "./paths.js";
 
-export type StoredTokens = {
-  issuer: string;
-  clientId: string;
-  /** Bearer for Vanta: a Signicat user JWT. Both kinds stored so switching is free. */
-  accessToken: string;
-  idToken?: string;
-  refreshToken?: string;
-  /** Epoch millis when the access token expires. */
-  expiresAt: number;
-  scope?: string;
-  /** Which token qp sends to Vanta as the bearer (access_token | id_token). */
-  bearerSource: "access_token" | "id_token";
+export type StoredCredential = {
+  /** The rqk_live_ API key relayed from the portal. */
+  value: string;
+  kind: "apikey";
+  /** Environment the key was minted for (sandbox | uat | prod). */
+  env: string;
+  keyId?: string;
+  scopes?: string[];
+  /** ISO expiry (or null/absent for non-expiring). */
+  expiresAt?: string | null;
+  /** Portal the pairing was done against (for reference / console links). */
+  portalUrl?: string;
   savedAt: number;
 };
 
-export function loadTokens(): StoredTokens | undefined {
-  const p = tokensPath();
+export function loadCredential(): StoredCredential | undefined {
+  const p = credentialPath();
   if (!existsSync(p)) return undefined;
   try {
-    const raw = readFileSync(p, "utf-8");
-    const parsed = JSON.parse(raw) as StoredTokens;
-    if (!parsed.accessToken || !parsed.issuer) return undefined;
+    const parsed = JSON.parse(readFileSync(p, "utf-8")) as StoredCredential;
+    if (!parsed.value || parsed.kind !== "apikey") return undefined;
     return parsed;
   } catch {
     return undefined;
   }
 }
 
-export function saveTokens(t: StoredTokens): void {
-  const dir = configDir();
-  mkdirSync(dir, { recursive: true });
-  const p = tokensPath();
-  writeFileSync(p, JSON.stringify(t, null, 2), { encoding: "utf-8", mode: 0o600 });
+export function saveCredential(c: StoredCredential): void {
+  mkdirSync(configDir(), { recursive: true });
+  const p = credentialPath();
+  writeFileSync(p, JSON.stringify(c, null, 2), { encoding: "utf-8", mode: 0o600 });
   try {
     chmodSync(p, 0o600);
   } catch {
@@ -48,8 +46,8 @@ export function saveTokens(t: StoredTokens): void {
   }
 }
 
-export function clearTokens(): boolean {
-  const p = tokensPath();
+export function clearCredential(): boolean {
+  const p = credentialPath();
   if (!existsSync(p)) return false;
   rmSync(p, { force: true });
   return true;
