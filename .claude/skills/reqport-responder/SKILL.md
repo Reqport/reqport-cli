@@ -40,10 +40,11 @@ the business-relationship loop; do not attempt it here.
   **`REQPORT_API_KEY`**. Never hardcode it, never print it, never commit it. The
   CLI never accepts a key as a flag.
 - If you have **no** key: ask the human to either create one on the portal
-  `/developer` page, **or** run `qp login` (Signicat browser sign-in) and then
+  `/developer` page, **or** run `qp login` (Signicat device-flow sign-in — they
+  approve on a Signicat page, no callback) and then
   `qp keys create --env sandbox --name agent --scopes payloads:read,responses:write`
   and hand you the cleartext. Minting requires ORG_ADMIN and a human login — an
-  API key cannot mint keys, and you cannot complete an interactive browser login
+  API key cannot mint keys, and you cannot complete an interactive Signicat login
   yourself.
 - Target env with `--env sandbox|uat|prod` (default `sandbox`). **Use `sandbox`.**
   Never touch `prod`.

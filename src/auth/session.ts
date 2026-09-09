@@ -50,29 +50,39 @@ function toStored(
 }
 
 export type LoginOptions = {
-  device?: boolean;
+  /** Use the loopback auth-code flow (NON-PROD only). Default is the device grant. */
+  loopback?: boolean;
   issuer?: string;
   clientId?: string;
   scope?: string;
+  acr?: string;
 };
 
 /** Run the interactive login flow and persist tokens. Returns a short summary. */
 export async function performLogin(
   opts: LoginOptions,
   progress: LoginProgress
-): Promise<{ issuer: string; clientId: string; scope: string; expiresAt: number }> {
+): Promise<{ issuer: string; clientId: string; scope: string; mode: string; expiresAt: number }> {
   const cfg = resolveOidcConfig({
     issuer: opts.issuer,
     clientId: opts.clientId,
     scope: opts.scope,
+    acr: opts.acr,
   });
   const disc = await discover(cfg.issuer);
-  const tokens = opts.device
-    ? await loginDeviceCode(cfg, disc, progress)
-    : await loginAuthCode(cfg, disc, progress);
+  // Device grant is the default (no redirect URI). Loopback is opt-in for local/dev.
+  const tokens = opts.loopback
+    ? await loginAuthCode(cfg, disc, progress)
+    : await loginDeviceCode(cfg, disc, progress);
   const stored = toStored(cfg, tokens);
   saveTokens(stored);
-  return { issuer: cfg.issuer, clientId: cfg.clientId, scope: cfg.scope, expiresAt: stored.expiresAt };
+  return {
+    issuer: cfg.issuer,
+    clientId: cfg.clientId,
+    scope: cfg.scope,
+    mode: opts.loopback ? "loopback" : "device",
+    expiresAt: stored.expiresAt,
+  };
 }
 
 export function logout(): boolean {
@@ -102,7 +112,7 @@ export async function getValidJwt(): Promise<string> {
   }
   const disc = await discover(t.issuer);
   const refreshed = await refresh({ clientId: t.clientId }, disc.token_endpoint, t.refreshToken);
-  t = toStored({ issuer: t.issuer, clientId: t.clientId, scope: t.scope ?? "" }, refreshed, t);
+  t = toStored({ issuer: t.issuer, clientId: t.clientId, scope: t.scope ?? "", acr: "" }, refreshed, t);
   saveTokens(t);
   return chooseBearer(t);
 }

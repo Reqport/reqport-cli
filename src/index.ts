@@ -45,19 +45,21 @@ async function main(): Promise<void> {
   // ── login / logout / whoami ────────────────────────────────────────────────
   program
     .command("login")
-    .description("Sign in via Signicat (browser) to mint your own API keys")
-    .option("--device", "use the device-code flow (headless / no local browser)", false)
+    .description("Sign in via Signicat to mint your own API keys (device flow — no callback)")
+    .option("--loopback", "use the auth-code + PKCE loopback flow (NON-PROD; needs a 127.0.0.1 redirect)", false)
     .option("--issuer <url>", "OIDC issuer (default https://login.reqport.com/auth/open or QP_ISSUER)")
     .option("--client-id <id>", "OAuth client_id (default QP_OAUTH_CLIENT_ID)")
     .option("--scope <scopes>", "OAuth scopes (default: openid profile email offline_access)")
+    .option("--acr <values>", "acr_values (default idp:otp-email or QP_OAUTH_ACR; \"\" to omit)")
     .action((opts) =>
       wrap(async () => {
         const { runLogin } = await import("./commands/login.js");
         return runLogin({
-          device: opts.device,
+          loopback: opts.loopback,
           issuer: opts.issuer,
           clientId: opts.clientId,
           scope: opts.scope,
+          acr: opts.acr,
           json: globalJson(),
         });
       })()

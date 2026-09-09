@@ -20,11 +20,15 @@ import { openBrowser } from "./openBrowser.js";
 
 export const DEFAULT_ISSUER = "https://login.reqport.com/auth/open";
 const DEFAULT_SCOPE = "openid profile email offline_access";
+/** Mirror the portal's email-OTP login so the UX matches. Overridable. */
+const DEFAULT_ACR = "idp:otp-email";
 
 export type OidcConfig = {
   issuer: string;
   clientId: string;
   scope: string;
+  /** acr_values (authentication method). Empty string = omit the param. */
+  acr: string;
 };
 
 export type Discovery = {
@@ -49,7 +53,14 @@ export function resolveOidcConfig(overrides?: Partial<OidcConfig>): OidcConfig {
   const issuer = overrides?.issuer || process.env.QP_ISSUER || DEFAULT_ISSUER;
   const clientId = overrides?.clientId || process.env.QP_OAUTH_CLIENT_ID || "";
   const scope = overrides?.scope || process.env.QP_OAUTH_SCOPE || DEFAULT_SCOPE;
-  return { issuer, clientId, scope };
+  // acr defaults to email-OTP; QP_OAUTH_ACR="" (explicit empty) or --acr "" omits it.
+  const acr =
+    overrides?.acr !== undefined
+      ? overrides.acr
+      : process.env.QP_OAUTH_ACR !== undefined
+        ? process.env.QP_OAUTH_ACR
+        : DEFAULT_ACR;
+  return { issuer, clientId, scope, acr };
 }
 
 export async function discover(issuer: string): Promise<Discovery> {
@@ -82,13 +93,20 @@ async function postForm(endpoint: string, form: Record<string, string>): Promise
 function requireClientId(cfg: OidcConfig): void {
   if (!cfg.clientId) {
     throw new Error(
-      "No OAuth client_id configured. Set QP_OAUTH_CLIENT_ID (or pass --client-id) to the PUBLIC `qp` client registered in Signicat.\n" +
-        "Until that client is registered, login cannot complete — see the registration spec in the README."
+      "No OAuth client_id configured. Set QP_OAUTH_CLIENT_ID (or pass --client-id) to the PUBLIC `qp` client in Signicat.\n" +
+        "That client must be registered in the authority tenant login.reqport.com/auth/open as a no-callback device-flow client:\n" +
+        "  client type=public, token_endpoint_auth_method=none, grants=device_code+refresh_token, PKCE S256, NO redirect URIs,\n" +
+        "  scopes=openid profile email offline_access, acr_values=idp:otp-email.\n" +
+        "See the 'Signicat client registration' section of the README for the full spec."
     );
   }
 }
 
-// ── Authorization Code + PKCE with loopback ──────────────────────────────────
+// ── Authorization Code + PKCE with loopback (NON-PROD / opt-in `--loopback`) ──
+//
+// The production authority client has NO redirect URIs, so this loopback path
+// only works against a client registered with a 127.0.0.1 callback (local/dev
+// use). The default login mode is the device grant below.
 
 export type LoginProgress = (msg: string) => void;
 
@@ -112,6 +130,7 @@ export async function loginAuthCode(
   authUrl.searchParams.set("state", state);
   authUrl.searchParams.set("code_challenge", pkce.challenge);
   authUrl.searchParams.set("code_challenge_method", pkce.method);
+  if (cfg.acr) authUrl.searchParams.set("acr_values", cfg.acr);
 
   progress(`Opening your browser to sign in:\n  ${authUrl.toString()}`);
   openBrowser(authUrl.toString());
@@ -197,7 +216,11 @@ async function startLoopback(expectedState: string): Promise<{
   };
 }
 
-// ── Device Authorization Grant ────────────────────────────────────────────────
+// ── Device Authorization Grant (DEFAULT login mode) ───────────────────────────
+//
+// No redirect URI at all — the user authorizes on a Signicat page (their own
+// device). This is the default because the production authority client is
+// registered without any callback URL.
 
 export type DeviceAuthResponse = {
   device_code: string;
@@ -216,13 +239,15 @@ export async function loginDeviceCode(
   requireClientId(cfg);
   if (!disc.device_authorization_endpoint) {
     throw new Error(
-      "This issuer's discovery document has no device_authorization_endpoint; use the default browser login instead."
+      "This issuer's discovery document has no device_authorization_endpoint; the tenant must enable the device grant."
     );
   }
-  const startRes = await postForm(disc.device_authorization_endpoint, {
+  const startForm: Record<string, string> = {
     client_id: cfg.clientId,
     scope: cfg.scope,
-  });
+  };
+  if (cfg.acr) startForm.acr_values = cfg.acr;
+  const startRes = await postForm(disc.device_authorization_endpoint, startForm);
   if (!startRes.ok) {
     const text = await startRes.text().catch(() => "");
     throw new Error(`Device authorization failed: HTTP ${startRes.status} ${text}`);

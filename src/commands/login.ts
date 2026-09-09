@@ -11,17 +11,27 @@ import { resolveOidcConfig } from "../auth/oidc.js";
 import { err, line, printJson } from "../ui.js";
 
 export async function runLogin(opts: {
-  device?: boolean;
+  loopback?: boolean;
   issuer?: string;
   clientId?: string;
   scope?: string;
+  acr?: string;
   json?: boolean;
 }): Promise<number> {
-  const cfg = resolveOidcConfig({ issuer: opts.issuer, clientId: opts.clientId, scope: opts.scope });
+  const cfg = resolveOidcConfig({
+    issuer: opts.issuer,
+    clientId: opts.clientId,
+    scope: opts.scope,
+    acr: opts.acr,
+  });
   if (!cfg.clientId) {
     const msg =
-      "No OAuth client_id configured. A PUBLIC `qp` client must be registered in Signicat, then set QP_OAUTH_CLIENT_ID (or pass --client-id).\n" +
-      "See the 'Signicat client registration' section of the README for the exact spec to hand your Signicat admin.";
+      "No OAuth client_id configured. Set QP_OAUTH_CLIENT_ID (or pass --client-id).\n" +
+      "A PUBLIC, no-callback DEVICE-FLOW `qp` client must be registered in the authority tenant\n" +
+      "login.reqport.com/auth/open: client type=public, token_endpoint_auth_method=none,\n" +
+      "grants=device_code+refresh_token, PKCE S256, NO redirect URIs, scopes=openid profile email\n" +
+      "offline_access, acr_values=idp:otp-email.\n" +
+      "See the 'Signicat client registration' section of the README for the full spec.";
     if (opts.json) printJson({ ok: false, reason: "no_client_id", issuer: cfg.issuer });
     else err(msg);
     return 1;
@@ -29,7 +39,7 @@ export async function runLogin(opts: {
 
   const progress = (m: string) => err(m); // progress → stderr so --json stdout stays clean
   const result = await performLogin(
-    { device: opts.device, issuer: opts.issuer, clientId: opts.clientId, scope: opts.scope },
+    { loopback: opts.loopback, issuer: opts.issuer, clientId: opts.clientId, scope: opts.scope, acr: opts.acr },
     progress
   );
 
@@ -37,7 +47,7 @@ export async function runLogin(opts: {
     printJson({ ok: true, ...result });
   } else {
     line("");
-    line(`Logged in to ${result.issuer}`);
+    line(`Logged in to ${result.issuer} (${result.mode} flow)`);
     line(`  client:  ${result.clientId}`);
     line(`  scopes:  ${result.scope}`);
     line(`  expires: ${new Date(result.expiresAt).toISOString()}`);
