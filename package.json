@@ -10,7 +10,7 @@
     "mcp",
     "cli"
   ],
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "qp": "dist/index.js"
