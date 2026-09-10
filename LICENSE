@@ -1,0 +1,19 @@
+Copyright (c) 2026 Reqport. All rights reserved.
+
+This software and its source code are proprietary and confidential. No license,
+right, or permission is granted to use, copy, modify, merge, publish, distribute,
+sublicense, or sell copies of this software, in whole or in part, except with the
+prior written permission of Reqport.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
+AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+NOTE FOR MAINTAINERS: this is a placeholder proprietary notice chosen because the
+sibling Reqport repositories carry no license and are private. If @reqport/cli is
+intended as a public, freely usable developer tool, replace this file with a
+permissive OSS license (e.g. MIT or Apache-2.0) and update the "license" field in
+package.json to match BEFORE publishing.

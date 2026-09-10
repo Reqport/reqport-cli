@@ -211,5 +211,10 @@ npm run dev -- --env sandbox doctor   # run from source with tsx
 Node >= 18. Uses the built-in global `fetch`; no network dependency beyond it.
 Exact-pinned deps: `commander`, `@modelcontextprotocol/sdk`, `zod`.
 
-> Not yet published to npm. Until then, run locally with `node dist/index.js …`
-> or `npm link`. Publishing is gated on the maintainer's go-ahead.
+### Releasing
+
+Publishing is automated: pushing a `v*` tag (matching `package.json`'s `version`)
+runs `.github/workflows/release.yml`, which builds and runs
+`npm publish --access public` using the repo's `NPM_TOKEN` secret. Before the
+first release, set the license you intend (see `LICENSE`) and add the `NPM_TOKEN`
+secret. Until published, run locally with `node dist/index.js …` or `npm link`.
