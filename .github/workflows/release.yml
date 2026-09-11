@@ -1,9 +1,21 @@
 name: release
 
-# Publish @reqport/cli to npm when a version tag (v*) is pushed.
-# Requires an NPM_TOKEN repository secret (an npm automation token with publish
-# rights to the @reqport scope). The tag drives the publish — no one handles the
-# token manually. Make sure the pushed tag matches the version in package.json.
+# Publish @reqport/cli to npm when a version tag (v*) is pushed — via npm OIDC
+# Trusted Publishing. There is NO NPM_TOKEN and no shared secret to rotate: auth
+# happens through GitHub Actions' OIDC id-token, which npm exchanges at publish
+# time, and every release gets a signed provenance attestation.
+#
+# ONE-TIME setup on npmjs.com (as an owner of the @reqport org): open the
+# @reqport/cli package -> Settings -> "Trusted Publisher" -> GitHub Actions, and
+# enter:
+#   Organization/repository: Reqport/reqport-cli
+#   Workflow filename:       release.yml
+#   Environment:             (leave blank)
+# If the package does not exist yet, do ONE interactive bootstrap publish first
+# (npm login && npm publish --access public), then add the trusted publisher —
+# every release after that is token-free via this workflow.
+#
+# The pushed tag drives the publish and must match the version in package.json.
 
 on:
   push:
@@ -12,6 +24,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write # REQUIRED: OIDC trusted publishing + provenance attestation
 
 jobs:
   publish:
@@ -25,6 +38,9 @@ jobs:
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
+
+      - name: Upgrade npm (OIDC trusted publishing needs npm >= 11.5.1)
+        run: npm install -g npm@latest
 
       - name: Install
         run: npm ci
@@ -40,7 +56,5 @@ jobs:
             exit 1
           fi
 
-      - name: Publish to npm
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish to npm (OIDC trusted publishing + provenance)
+        run: npm publish --access public --provenance
