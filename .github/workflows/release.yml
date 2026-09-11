@@ -40,7 +40,9 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: Upgrade npm (OIDC trusted publishing needs npm >= 11.5.1)
-        run: npm install -g npm@latest
+        # Pin to the 11.x line: npm@latest is 12.x which requires Node >= 22.22,
+        # but this job runs Node 20. 11.x is >= 11.5.1 (OIDC-capable) and runs on Node 20.
+        run: npm install -g npm@^11.5.1
 
       - name: Install
         run: npm ci
