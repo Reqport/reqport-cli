@@ -156,9 +156,11 @@ async function pollOnce(
   if (res.status === 403) {
     throw new Error("The portal rejected the pairing (verifier mismatch). Run `qp login` again.");
   }
-  if (res.status === 404) {
-    throw new Error("Pairing session not found. Approve on the portal page, or run `qp login` again.");
-  }
+  // 404 = the pairing session is not registered YET. It's created when the portal page loads
+  // (after you sign in), which can be several seconds after the browser opens — and stays 404
+  // until then. Treat it as pending and keep polling until you approve (200) or the overall
+  // deadline is reached, rather than aborting before you've had a chance to approve.
+  if (res.status === 404) return "pending";
   if (res.status === 410) {
     throw new Error("Pairing session expired. Run `qp login` again.");
   }
