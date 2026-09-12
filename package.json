@@ -27,11 +27,15 @@
   "publishConfig": {
     "access": "public"
   },
+  "author": {
+    "name": "Reqport",
+    "url": "https://reqport.com"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Reqport/reqport-cli.git"
   },
-  "homepage": "https://github.com/Reqport/reqport-cli#readme",
+  "homepage": "https://reqport.com/en/developer",
   "bugs": {
     "url": "https://github.com/Reqport/reqport-cli/issues"
   },

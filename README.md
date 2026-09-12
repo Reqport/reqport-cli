@@ -1,7 +1,13 @@
 # @reqport/cli — `qp`
 
-A publishable `npx` CLI (binary: **`qp`**) **and** bundled **MCP server** for
-Reqport **responders** — the data-holder side. Discover the requests addressed to
+[![npm version](https://img.shields.io/npm/v/@reqport/cli.svg)](https://www.npmjs.com/package/@reqport/cli)
+[![node](https://img.shields.io/node/v/@reqport/cli.svg)](https://nodejs.org)
+[![license: MIT](https://img.shields.io/npm/l/@reqport/cli.svg)](./LICENSE)
+[![published with provenance](https://img.shields.io/badge/npm-provenance-cb0000.svg)](https://docs.npmjs.com/generating-provenance-statements)
+[![MCP server](https://img.shields.io/badge/MCP-server-5b50e0.svg)](https://modelcontextprotocol.io)
+
+The official command-line client + MCP server for **[Reqport](https://reqport.com)** —
+a publishable `npx` CLI (binary: **`qp`**) for Reqport **responders** — the data-holder side. Discover the requests addressed to
 your organisation, read them, and answer them (e.g. **Engagemangskontroll** /
 business-relationship checks as ISO 20022 **auth.002**). Humans can pair the CLI
 with the Reqport console (`qp login`) to receive an API key without copy-pasting
@@ -213,8 +219,16 @@ Exact-pinned deps: `commander`, `@modelcontextprotocol/sdk`, `zod`.
 
 ### Releasing
 
-Publishing is automated: pushing a `v*` tag (matching `package.json`'s `version`)
-runs `.github/workflows/release.yml`, which builds and runs
-`npm publish --access public` using the repo's `NPM_TOKEN` secret. Before the
-first release, set the license you intend (see `LICENSE`) and add the `NPM_TOKEN`
-secret. Until published, run locally with `node dist/index.js …` or `npm link`.
+Releases publish to npm via **OIDC Trusted Publishing** with **provenance** — no
+long-lived token in CI. Bump `version`, push a matching `v*` tag, and
+`.github/workflows/release.yml` builds and runs `npm publish --provenance` under
+the workflow's OIDC identity. This requires a one-time **Trusted Publisher** entry
+(`Reqport/reqport-cli` + `release.yml`) configured on the npm package's settings
+page. Until a release is published, run locally with `node dist/index.js …` or
+`npm link`.
+
+---
+
+**Links** · [npm](https://www.npmjs.com/package/@reqport/cli) · [Developer docs](https://reqport.com/en/developer) · [Source](https://github.com/Reqport/reqport-cli) · [Report an issue](https://github.com/Reqport/reqport-cli/issues)
+
+Built by **[Reqport](https://reqport.com)**. Licensed under [MIT](./LICENSE).
