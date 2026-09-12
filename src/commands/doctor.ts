@@ -3,7 +3,7 @@
  *
  * - Resolves --env → base URL.
  * - GET /v1/attestation to confirm reachability + TEE attestation posture.
- * - Resolves the active credential (REQPORT_API_KEY, else a `qp login` JWT) and
+ * - Resolves the active credential (REQPORT_API_KEY, else the `qp login` key) and
  *   probes GET /v1/affordances to confirm it authenticates.
  */
 
@@ -18,11 +18,24 @@ export async function runDoctor(env: ReqportEnv, json: boolean): Promise<number>
   const client = new ReqportClient({ env, credential: cred });
   const login = loginSummary();
 
+  // The credential actually in use, and where it came from — display the STORED
+  // key when REQPORT_API_KEY is unset (the earlier bug showed "(not set)" here).
+  const credSource = key ? "REQPORT_API_KEY (env)" : login.loggedIn ? "stored login" : "none";
+  const keyId = (login.keyId as string | null | undefined) ?? null;
+  const portalUrl = (login.portalUrl as string | null | undefined) ?? null;
+  const identity = login.loggedIn
+    ? `key ${keyId ?? "(unknown)"}${portalUrl ? ` @ ${portalUrl}` : ""}`
+    : "not logged in";
+
   const report: Record<string, unknown> = {
     env,
     baseUrl: client.baseUrl,
+    apiKey: maskKey(cred?.value),
+    apiKeySource: credSource,
     apiKeyEnv: maskKey(key),
     apiKeyPresent: Boolean(key),
+    keyId,
+    scopes: (login.scopes as string[] | undefined) ?? [],
     login,
     activeCredential: cred?.kind ?? "none",
   };
@@ -54,11 +67,13 @@ export async function runDoctor(env: ReqportEnv, json: boolean): Promise<number>
   if (json) {
     printJson(report);
   } else {
+    const scopes = (report.scopes as string[]);
     line(`qp doctor`);
     line(`  env:         ${env}`);
     line(`  base URL:    ${client.baseUrl}`);
-    line(`  API key:     ${report.apiKeyEnv}`);
-    line(`  login:       ${login.loggedIn ? `${login.clientId} @ ${login.issuer}` : "not logged in"}`);
+    line(`  API key:     ${report.apiKey}${cred ? ` (${credSource})` : ""}`);
+    line(`  login:       ${identity}`);
+    if (login.loggedIn) line(`  scopes:      ${scopes.length ? scopes.join(", ") : "(none reported)"}`);
     line(`  active cred: ${report.activeCredential}`);
     const att = report.attestation as { ok: boolean; hasToken?: boolean; detail?: string };
     line(

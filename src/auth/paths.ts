@@ -24,3 +24,13 @@ export function configDir(): string {
 export function credentialPath(): string {
   return join(configDir(), "credential.json");
 }
+
+/**
+ * Per-env credential file. `qp login` writes one of these per environment (in
+ * addition to the active `credential.json`), so `qp use <env>` can switch the
+ * active env among the credentials already stored on this machine.
+ */
+export function credentialPathFor(env: string): string {
+  const safe = env.replace(/[^a-z0-9_-]/gi, "");
+  return join(configDir(), `credential.${safe}.json`);
+}

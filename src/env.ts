@@ -7,6 +7,8 @@
  * runtime only. The CLI NEVER accepts a key as a flag and NEVER logs it.
  */
 
+import { activeEnv } from "./auth/store.js";
+
 export type ReqportEnv = "sandbox" | "uat" | "prod";
 
 const BASE_URLS: Record<ReqportEnv, string> = {
@@ -20,18 +22,27 @@ export function isReqportEnv(v: string | undefined): v is ReqportEnv {
 }
 
 /**
- * Resolve the target environment. Precedence: explicit --env flag, then
- * REQPORT_ENV, then the default (sandbox — the only public responder sandbox).
+ * Resolve the target environment. Precedence:
+ *   1. explicit --env flag,
+ *   2. REQPORT_ENV,
+ *   3. the active stored credential's env (set by `qp login` / `qp use`),
+ *   4. the default (sandbox — the only public responder sandbox).
+ * So after `qp login` (which stores an env), commands need no --env; the flag
+ * and REQPORT_ENV still override for one-off cross-env calls.
  */
 export function resolveEnv(flag?: string): ReqportEnv {
-  const candidate = flag ?? process.env.REQPORT_ENV;
-  if (candidate === undefined || candidate === "") return "sandbox";
-  if (!isReqportEnv(candidate)) {
-    throw new Error(
-      `Unknown --env "${candidate}". Expected one of: sandbox, uat, prod.`
-    );
+  const explicit = flag ?? process.env.REQPORT_ENV;
+  if (explicit !== undefined && explicit !== "") {
+    if (!isReqportEnv(explicit)) {
+      throw new Error(
+        `Unknown --env "${explicit}". Expected one of: sandbox, uat, prod.`
+      );
+    }
+    return explicit;
   }
-  return candidate;
+  const stored = activeEnv();
+  if (stored !== undefined && isReqportEnv(stored)) return stored;
+  return "sandbox";
 }
 
 export function baseUrlFor(env: ReqportEnv): string {

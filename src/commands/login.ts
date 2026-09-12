@@ -1,17 +1,19 @@
 /**
- * `qp login` / `qp logout` / `qp whoami` — portal-pairing authentication.
+ * `qp login` / `qp logout` / `qp whoami` / `qp use` — portal-pairing auth + the
+ * active-env switch.
  *
  * `qp login` opens the Reqport console's CLI-auth page (which reuses the portal's
  * existing Signicat session — no new OAuth client, no device flow, no localhost
  * callback), the human approves, and the portal mints + relays an rqk_live_ key
- * back to the CLI. The key is stored as the active credential.
+ * back to the CLI. The key is stored as the active credential (and as a per-env
+ * copy). `qp use <env>` switches which stored credential is active.
  */
 
 import type { ReqportEnv } from "../env.js";
-import { maskKey } from "../env.js";
+import { isReqportEnv, maskKey } from "../env.js";
 import { isLoggedIn, logout, loginSummary } from "../auth/session.js";
 import { DEFAULT_PORTAL_URL, runPairing } from "../auth/pairing.js";
-import { saveCredential } from "../auth/store.js";
+import { activateEnv, listStoredEnvs, saveCredential } from "../auth/store.js";
 import { err, line, printJson } from "../ui.js";
 
 function resolvePortalUrl(flag?: string): string {
@@ -64,7 +66,7 @@ export async function runLogin(opts: {
     if (result.expiresAt) line(`  expires: ${result.expiresAt}`);
     line(`  key:     ${maskKey(result.apiKey)}`);
     line("");
-    line(`Try it:  qp --env ${env} doctor`);
+    line(`Active env is now ${env}. Try it:  qp doctor`);
   }
   return 0;
 }
@@ -91,4 +93,55 @@ export function runWhoami(json: boolean): number {
     if (summary.portalUrl) line(`  portal:  ${summary.portalUrl}`);
   }
   return isLoggedIn() ? 0 : 1;
+}
+
+/**
+ * `qp use [env]` — switch the active env among stored credentials, or (with no
+ * arg) print the current active env + key id + login identity.
+ */
+export function runUse(envArg: string | undefined, json: boolean): number {
+  const stored = listStoredEnvs();
+
+  // No arg → report the current active env (same info as whoami, plus the pool).
+  if (envArg === undefined || envArg === "") {
+    const summary = loginSummary();
+    if (json) {
+      printJson({ activeEnv: summary.loggedIn ? summary.env : null, storedEnvs: stored, login: summary });
+      return summary.loggedIn ? 0 : 1;
+    }
+    if (!summary.loggedIn) {
+      line("No active credential. Run `qp login` (or `qp login --env <env>`).");
+      return 1;
+    }
+    line(`Active env: ${summary.env}`);
+    line(`  key id:  ${summary.keyId ?? "(unknown)"}`);
+    if (summary.portalUrl) line(`  portal:  ${summary.portalUrl}`);
+    line(`  stored:  ${stored.join(", ") || "(none)"}`);
+    return 0;
+  }
+
+  if (!isReqportEnv(envArg)) {
+    err(`Unknown env "${envArg}". Expected one of: sandbox, uat, prod.`);
+    return 1;
+  }
+
+  const cred = activateEnv(envArg);
+  if (!cred) {
+    if (json) {
+      printJson({ ok: false, env: envArg, reason: "no_credential", storedEnvs: stored });
+    } else {
+      line(`No stored credential for "${envArg}". Run \`qp login --env ${envArg}\` first.`);
+      if (stored.length) line(`  stored envs: ${stored.join(", ")}`);
+    }
+    return 1;
+  }
+
+  if (json) {
+    printJson({ ok: true, activeEnv: cred.env, keyId: cred.keyId ?? null, scopes: cred.scopes ?? [] });
+  } else {
+    line(`Active env is now ${cred.env}.`);
+    line(`  key id:  ${cred.keyId ?? "(unknown)"}`);
+    line(`  scopes:  ${(cred.scopes ?? []).join(", ") || "(none reported)"}`);
+  }
+  return 0;
 }

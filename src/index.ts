@@ -80,6 +80,17 @@ async function main(): Promise<void> {
       })()
     );
 
+  program
+    .command("use [env]")
+    .alias("env")
+    .description("Switch the active env among stored logins (sandbox | uat | prod); no arg shows the current one")
+    .action((env) =>
+      wrap(async () => {
+        const { runUse } = await import("./commands/login.js");
+        return runUse(env as string | undefined, globalJson());
+      })()
+    );
+
   // ── requests ─────────────────────────────────────────────────────────────
   const requests = program.command("requests").description("Discover and read requests");
 
