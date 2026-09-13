@@ -135,6 +135,82 @@ export type ResponseResult = {
   [k: string]: unknown;
 };
 
+// ── Multi-org chat + attachments ────────────────────────────────────────────
+
+/** The graph target a chat or attachment is anchored to (a node or an edge). */
+export type ChatTargetKind = "node" | "edge";
+export type ChatTarget = { kind: ChatTargetKind; id: string };
+
+/** A participant org sealed into a chat. */
+export type ChatParticipant = {
+  namespaceId?: string;
+  org: string;
+  [k: string]: unknown;
+};
+
+/** ChatView — chat metadata (no message bodies). */
+export type ChatView = {
+  chatId: string;
+  kind?: string;
+  target: ChatTarget;
+  title?: string;
+  participants: ChatParticipant[];
+  createdAt?: string;
+  [k: string]: unknown;
+};
+
+/** One message as returned in GET /v1/chats/{id} (caller's decrypted copy). */
+export type ChatMessage = {
+  messageId: string;
+  kind?: string;
+  body?: string;
+  createdAt?: string;
+  [k: string]: unknown;
+};
+
+/** GET /v1/chats/{id} */
+export type ChatDetail = {
+  chat: ChatView;
+  messages: ChatMessage[];
+};
+
+/** POST /v1/chats/{id}/messages result. */
+export type ChatMessageResult = {
+  messageId?: string;
+  chatId?: string;
+  sealedParticipantCount?: number;
+  [k: string]: unknown;
+};
+
+/** AttachmentView — attachment metadata (no bytes). */
+export type AttachmentView = {
+  attachmentId: string;
+  messageId?: string;
+  filename?: string;
+  mimeType?: string;
+  size?: number;
+  target: ChatTarget;
+  participantCount?: number;
+  createdAt?: string;
+  [k: string]: unknown;
+};
+
+/** POST /v1/attachments body (JSON; server seals — no client crypto). */
+export type AttachmentCreate = {
+  target: ChatTarget;
+  filename?: string;
+  mimeType?: string;
+  contentBase64: string;
+  participants?: string[];
+};
+
+/** Raw bytes + response metadata from GET /v1/attachments/{id}/download. */
+export type AttachmentDownload = {
+  bytes: Buffer;
+  contentType?: string;
+  filename?: string;
+};
+
 /** A decoded request payload plus the resolved plaintext. */
 export type DecodedPayload = {
   payloadId: string;

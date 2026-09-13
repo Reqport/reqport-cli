@@ -6,6 +6,7 @@
 import { ReqportApiError, ReqportClient } from "./client.js";
 import type {
   AccountInstrument,
+  ChatTarget,
   DecodedPayload,
   PayloadMetaResponse,
   ResponseResult,
@@ -127,6 +128,65 @@ export function parseAccountArg(raw: string): AccountInstrument {
   if (parts[2]) instrument.scheme = parts[2];
   if (parts.length > 3) instrument.label = parts.slice(3).join(":");
   return instrument;
+}
+
+/**
+ * Parse a `--target <kind>:<id>` argument into a {kind,id} ChatTarget. The kind
+ * must be `node` or `edge`; the id is the remainder (allowing colons, though
+ * ids are normally UUIDs). Shared by the chat + attachment commands and MCP.
+ */
+export function parseTarget(raw: string): ChatTarget {
+  const idx = raw.indexOf(":");
+  if (idx <= 0) {
+    throw new Error(
+      `Invalid --target "${raw}": expected <kind>:<id> where kind is node or edge (e.g. node:<uuid>).`
+    );
+  }
+  const kind = raw.slice(0, idx).toLowerCase();
+  const id = raw.slice(idx + 1);
+  if (kind !== "node" && kind !== "edge") {
+    throw new Error(
+      `Invalid --target "${raw}": kind must be "node" or "edge" (got "${kind}").`
+    );
+  }
+  if (!id) {
+    throw new Error(`Invalid --target "${raw}": missing id after "${kind}:".`);
+  }
+  return { kind, id };
+}
+
+/** A small extension → MIME-type map for attachment uploads. */
+const MIME_BY_EXT: Record<string, string> = {
+  pdf: "application/pdf",
+  json: "application/json",
+  xml: "application/xml",
+  csv: "text/csv",
+  txt: "text/plain",
+  md: "text/markdown",
+  html: "text/html",
+  htm: "text/html",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+  zip: "application/zip",
+  doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xls: "application/vnd.ms-excel",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+};
+
+/**
+ * Infer a MIME type from a filename's extension, defaulting to
+ * application/octet-stream when unknown.
+ */
+export function mimeTypeForFilename(filename: string): string {
+  const dot = filename.lastIndexOf(".");
+  if (dot < 0 || dot === filename.length - 1) return "application/octet-stream";
+  const ext = filename.slice(dot + 1).toLowerCase();
+  return MIME_BY_EXT[ext] ?? "application/octet-stream";
 }
 
 export type RespondInput = {

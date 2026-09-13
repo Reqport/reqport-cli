@@ -19,8 +19,15 @@ import { randomUUID } from "node:crypto";
 import { baseUrlFor, type ReqportEnv } from "./env.js";
 import type {
   AffordanceListResponse,
+  AttachmentCreate,
+  AttachmentDownload,
+  AttachmentView,
   AttestationResponse,
   BusinessRelationshipAnswer,
+  ChatDetail,
+  ChatMessageResult,
+  ChatTarget,
+  ChatView,
   DecryptBatchResponse,
   PayloadMetaResponse,
   ResponseResult,
@@ -116,6 +123,47 @@ export class ReqportClient {
     const text = await res.text();
     if (!text) return undefined as unknown as T;
     return JSON.parse(text) as T;
+  }
+
+  /**
+   * Like {@link request}, but returns the raw response body as a Buffer instead
+   * of parsing JSON (for binary downloads). Also surfaces the Content-Type and
+   * the Content-Disposition filename so callers can name the saved file.
+   */
+  private async requestBytes(
+    path: string,
+    init: RequestInit & { auth?: boolean } = {}
+  ): Promise<{ bytes: Buffer; contentType?: string; filename?: string }> {
+    const { auth = true, headers, ...rest } = init;
+    const h: Record<string, string> = {
+      Accept: "application/octet-stream",
+      ...(headers as Record<string, string> | undefined),
+    };
+    if (auth) {
+      if (!this.credential) {
+        throw new Error(
+          "This operation requires authentication. Set REQPORT_API_KEY or run `qp login`."
+        );
+      }
+      h["Authorization"] = `Bearer ${this.credential.value}`;
+    }
+
+    let res: Response;
+    try {
+      res = await fetch(this.url(path), { ...rest, headers: h });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(`Network error calling ${this.url(path)}: ${msg}`);
+    }
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new ReqportApiError(res.status, path, body);
+    }
+    const bytes = Buffer.from(await res.arrayBuffer());
+    const contentType = res.headers.get("content-type") ?? undefined;
+    const disposition = res.headers.get("content-disposition") ?? undefined;
+    return { bytes, contentType, filename: filenameFromDisposition(disposition) };
   }
 
   // ── Unauthenticated ──────────────────────────────────────────────────────
@@ -250,4 +298,119 @@ export class ReqportClient {
       { method: "POST", idempotent: true, body: JSON.stringify(answer) }
     );
   }
+
+  // ── Multi-org chat ─────────────────────────────────────────────────────────
+
+  /**
+   * POST /v1/chats — open a chat anchored to a node/edge. Caller and every
+   * named participant must be PARTIES to the target (server enforces: non-party
+   * caller → 403, non-party participant → 400). Returns the ChatView.
+   */
+  createChat(input: {
+    target: ChatTarget;
+    participants: string[];
+    title?: string;
+  }): Promise<ChatView> {
+    const body: Record<string, unknown> = {
+      target: input.target,
+      participants: input.participants,
+    };
+    if (input.title) body.title = input.title;
+    return this.request<ChatView>(`/v1/chats`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  /** POST /v1/chats/{id}/messages — post a message; the server seals a copy per participant. */
+  postChatMessage(chatId: string, body: string): Promise<ChatMessageResult> {
+    return this.request<ChatMessageResult>(
+      `/v1/chats/${encodeURIComponent(chatId)}/messages`,
+      { method: "POST", body: JSON.stringify({ body }) }
+    );
+  }
+
+  /** POST /v1/chats/{id}/participants — add a party org to an existing chat. */
+  addChatParticipant(chatId: string, org: string): Promise<ChatView> {
+    return this.request<ChatView>(
+      `/v1/chats/${encodeURIComponent(chatId)}/participants`,
+      { method: "POST", body: JSON.stringify({ org }) }
+    );
+  }
+
+  /** GET /v1/chats/{id} — chat metadata + the caller's decrypted message copies. */
+  getChat(chatId: string): Promise<ChatDetail> {
+    return this.request<ChatDetail>(`/v1/chats/${encodeURIComponent(chatId)}`, {
+      method: "GET",
+    });
+  }
+
+  /** GET /v1/chats?target=<kind>:<id> — chats anchored to a node/edge. */
+  listChats(target: ChatTarget): Promise<ChatView[]> {
+    const q = `?target=${encodeURIComponent(`${target.kind}:${target.id}`)}`;
+    return this.request<ChatView[]>(`/v1/chats${q}`, { method: "GET" });
+  }
+
+  // ── Attachments ────────────────────────────────────────────────────────────
+
+  /**
+   * POST /v1/attachments — upload an attachment as base64 JSON. The server seals
+   * it (no client crypto). Caller + participants must be parties to the target.
+   */
+  createAttachment(input: AttachmentCreate): Promise<AttachmentView> {
+    const body: Record<string, unknown> = {
+      target: input.target,
+      contentBase64: input.contentBase64,
+    };
+    if (input.filename) body.filename = input.filename;
+    if (input.mimeType) body.mimeType = input.mimeType;
+    if (input.participants && input.participants.length > 0) {
+      body.participants = input.participants;
+    }
+    return this.request<AttachmentView>(`/v1/attachments`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  /** GET /v1/attachments/{id} — attachment metadata (no bytes). */
+  getAttachment(attachmentId: string): Promise<AttachmentView> {
+    return this.request<AttachmentView>(
+      `/v1/attachments/${encodeURIComponent(attachmentId)}`,
+      { method: "GET" }
+    );
+  }
+
+  /**
+   * GET /v1/attachments/{id}/download — raw bytes (server-decrypted). Returns a
+   * Buffer plus the Content-Type and Content-Disposition filename.
+   */
+  async downloadAttachment(attachmentId: string): Promise<AttachmentDownload> {
+    return this.requestBytes(
+      `/v1/attachments/${encodeURIComponent(attachmentId)}/download`,
+      { method: "GET" }
+    );
+  }
+
+  /** GET /v1/attachments?target=<kind>:<id> — attachments anchored to a node/edge. */
+  listAttachments(target: ChatTarget): Promise<AttachmentView[]> {
+    const q = `?target=${encodeURIComponent(`${target.kind}:${target.id}`)}`;
+    return this.request<AttachmentView[]>(`/v1/attachments${q}`, { method: "GET" });
+  }
+}
+
+/** Extract a filename from a Content-Disposition header, if present. */
+function filenameFromDisposition(disposition?: string): string | undefined {
+  if (!disposition) return undefined;
+  // RFC 5987 filename*=UTF-8''… takes precedence over a plain filename=.
+  const star = /filename\*=(?:UTF-8'')?([^;]+)/i.exec(disposition);
+  if (star?.[1]) {
+    try {
+      return decodeURIComponent(star[1].trim().replace(/^"|"$/g, ""));
+    } catch {
+      /* fall through to plain */
+    }
+  }
+  const plain = /filename="?([^";]+)"?/i.exec(disposition);
+  return plain?.[1]?.trim();
 }
