@@ -18,6 +18,12 @@ export function isBusinessRelationship(workflowType: string | undefined): boolea
   return workflowType.toUpperCase().includes("BUSINESS_RELATIONSHIP");
 }
 
+/** Does this workflow type use the crypto transaction-history statement endpoint? */
+export function isTransactionHistory(workflowType: string | undefined): boolean {
+  if (!workflowType) return false;
+  return workflowType.toUpperCase().includes("TRANSACTION_HISTORY");
+}
+
 /** Decode base64 plaintext into text + parsed JSON (best effort). */
 function decodeItem(
   payloadId: string,
@@ -134,10 +140,18 @@ export type RespondInput = {
   payloadId?: string;
   /** Generic-path free-text answer. */
   freeText?: string;
+  /**
+   * Transaction-history path: the parsed camt.053-CA statement object, sent
+   * inline and sealed server-side.
+   */
+  statement?: unknown;
 };
 
 export type RespondOutcome = {
-  endpoint: "business-relationship-response" | "response";
+  endpoint:
+    | "business-relationship-response"
+    | "transaction-history-response"
+    | "response";
   workflowType: string;
   requestId: string;
   submitted: Record<string, unknown>;
@@ -182,6 +196,27 @@ export async function performRespond(
       workflowType: workflow.workflowType,
       requestId: id,
       submitted: answer,
+      result,
+    };
+  }
+
+  // Crypto transaction-history path — inline camt.053-CA statement, sealed server-side.
+  if (isTransactionHistory(workflow.workflowType)) {
+    if (input.statement === undefined) {
+      throw new Error(
+        "This is a transaction-history request — pass a camt.053-CA statement (--statement <file.json>)."
+      );
+    }
+    const answer: Record<string, unknown> = { statement: input.statement };
+    if (input.note) answer.note = input.note;
+    const result = await client.submitTransactionHistoryResponse(id, answer as never);
+    return {
+      endpoint: "transaction-history-response",
+      workflowType: workflow.workflowType,
+      requestId: id,
+      // Redact the statement body from the echoed submission (it may be large
+      // and carry subject data); the server validated + sealed it.
+      submitted: { statement: "(camt.053-CA statement)", ...(input.note ? { note: input.note } : {}) },
       result,
     };
   }

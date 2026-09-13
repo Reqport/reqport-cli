@@ -25,6 +25,7 @@ import type {
   PayloadMetaResponse,
   ResponseResult,
   ResponseSubmission,
+  TransactionHistoryAnswer,
   WorkflowInstanceResponse,
 } from "./types.js";
 
@@ -229,6 +230,24 @@ export class ReqportClient {
     return this.request<ResponseResult>(
       `/v1/requests/${encodeURIComponent(id)}/response`,
       { method: "POST", idempotent: true, body: JSON.stringify(submission) }
+    );
+  }
+
+  /**
+   * POST /v1/requests/{id}/transaction-history-response — the crypto
+   * transaction-history answer. The camt.053-CA statement is sent INLINE as
+   * JSON; Vanta validates it against the CAMT053_CA_JSON schema and seals it
+   * server-side in the TEE (no client crypto), exactly like the
+   * business-relationship account disclosure. Scope responses:write; caller org
+   * must be the request's responder org.
+   */
+  submitTransactionHistoryResponse(
+    id: string,
+    answer: TransactionHistoryAnswer
+  ): Promise<ResponseResult> {
+    return this.request<ResponseResult>(
+      `/v1/requests/${encodeURIComponent(id)}/transaction-history-response`,
+      { method: "POST", idempotent: true, body: JSON.stringify(answer) }
     );
   }
 }

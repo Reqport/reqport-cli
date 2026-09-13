@@ -137,6 +137,10 @@ async function main(): Promise<void> {
     .option("--note <text>", "optional free-text note (auth.002 AddtlInf)")
     .option("--free-text <text>", "generic response free-text answer")
     .option("--payload-id <uuid>", "advanced: a pre-sealed answer document payloadId")
+    .option(
+      "--statement <path>",
+      "transaction-history: a camt.053-CA JSON statement file to answer with (sealed server-side)"
+    )
     .option("--show", "show the request before answering (default when not --json)")
     .option("-y, --yes", "skip the confirmation prompt", false)
     .action((id, opts) =>
@@ -149,6 +153,7 @@ async function main(): Promise<void> {
           note: opts.note,
           freeText: opts.freeText,
           payloadId: opts.payloadId,
+          statement: opts.statement,
           show: opts.show,
           yes: opts.yes,
           json: globalJson(),

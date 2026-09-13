@@ -5,7 +5,7 @@
 import { ReqportClient } from "../client.js";
 import { type ReqportEnv } from "../env.js";
 import { requireResponderCredential } from "../auth/session.js";
-import { isBusinessRelationship, readRequest } from "../core.js";
+import { isBusinessRelationship, isTransactionHistory, readRequest } from "../core.js";
 import { line, printJson, table } from "../ui.js";
 
 export async function runList(
@@ -90,6 +90,9 @@ export async function runShow(
     line("Answer it:");
     line(`  qp respond ${id} --has-relationship false          # no such customer (auth.002 NFOU)`);
     line(`  qp respond ${id} --has-relationship true --account ACCOUNT:SE1234567890:IBAN:Main`);
+  } else if (isTransactionHistory(wf.workflowType)) {
+    line("Answer it with a camt.053-CA statement (an open crypto-asset profile of ISO 20022 camt.053):");
+    line(`  qp respond ${id} --statement ./statement.json   # inline; validated + sealed server-side`);
   } else {
     line("Answer it:");
     line(`  qp respond ${id} --status NFOU`);

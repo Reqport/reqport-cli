@@ -196,6 +196,34 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
   );
 
   server.registerTool(
+    "reqport_respond_transaction_history",
+    {
+      title: "Answer a crypto transaction-history request",
+      description:
+        "Answer a TRANSACTION_HISTORY_CHECK with a camt.053-CA Crypto-Asset Statement. Pass the full statement as a JSON object; Vanta validates it against the CAMT053_CA_JSON schema and seals it server-side in the TEE (no client crypto).",
+      inputSchema: {
+        env: envSchema,
+        id: z.string().describe("Request id."),
+        statement: z
+          .record(z.string(), z.unknown())
+          .describe("A camt.053-CA/v0.1 statement object (profile, statementId, period, responder, account, balances, entries)."),
+        note: z.string().optional(),
+      },
+    },
+    async ({ env, id, statement, note }) => {
+      try {
+        const outcome = await performRespond(clientFor(env ?? defaultEnv), id, {
+          statement,
+          note,
+        });
+        return ok(outcome);
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  server.registerTool(
     "reqport_respond",
     {
       title: "Answer a generic request",

@@ -92,6 +92,16 @@ export type BusinessRelationshipAnswer = {
   accounts?: AccountInstrument[];
 };
 
+/**
+ * POST /v1/requests/{id}/transaction-history-response body. The camt.053-CA
+ * statement is sent INLINE as JSON; Vanta validates it against the
+ * CAMT053_CA_JSON schema and seals it server-side (no client crypto).
+ */
+export type TransactionHistoryAnswer = {
+  statement: unknown;
+  note?: string;
+};
+
 /** POST /v1/requests/{id}/response body (the generic responder path). */
 export type ResponseItem = {
   category?: number;
