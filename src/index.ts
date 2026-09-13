@@ -137,6 +137,10 @@ async function main(): Promise<void> {
     .option("--note <text>", "optional free-text note (auth.002 AddtlInf)")
     .option("--free-text <text>", "generic response free-text answer")
     .option("--payload-id <uuid>", "advanced: a pre-sealed answer document payloadId")
+    .option(
+      "--statement <path>",
+      "transaction-history: a camt.053-CA JSON statement file to answer with (sealed server-side)"
+    )
     .option("--show", "show the request before answering (default when not --json)")
     .option("-y, --yes", "skip the confirmation prompt", false)
     .action((id, opts) =>
@@ -149,10 +153,132 @@ async function main(): Promise<void> {
           note: opts.note,
           freeText: opts.freeText,
           payloadId: opts.payloadId,
+          statement: opts.statement,
           show: opts.show,
           yes: opts.yes,
           json: globalJson(),
         });
+      })()
+    );
+
+  // ── chat ────────────────────────────────────────────────────────────────
+  const chat = program
+    .command("chat")
+    .description("Multi-org chat anchored to a graph node/edge (server-sealed, no client crypto)");
+
+  chat
+    .command("create")
+    .description("Open a chat on a node/edge with one or more participant orgs")
+    .requiredOption("--target <kind:id>", "target node:<uuid> or edge:<uuid>")
+    .option(
+      "--participant <org>",
+      "a participant org (repeatable); all must be parties to the target",
+      (val: string, prev: string[]) => [...prev, val],
+      [] as string[]
+    )
+    .option("--title <t>", "optional chat title")
+    .action((opts) =>
+      wrap(async () => {
+        const { runChatCreate } = await import("./commands/chat.js");
+        return runChatCreate(globalEnv(), {
+          target: opts.target,
+          participant: opts.participant,
+          title: opts.title,
+          json: globalJson(),
+        });
+      })()
+    );
+
+  chat
+    .command("post <chatId>")
+    .description("Post a message to a chat (sealed per participant server-side)")
+    .requiredOption("--message <text>", "the message body")
+    .action((chatId, opts) =>
+      wrap(async () => {
+        const { runChatPost } = await import("./commands/chat.js");
+        return runChatPost(globalEnv(), chatId, { message: opts.message, json: globalJson() });
+      })()
+    );
+
+  chat
+    .command("add <chatId>")
+    .description("Add a party org to an existing chat")
+    .requiredOption("--org <org>", "the org to add (must be a party to the target)")
+    .action((chatId, opts) =>
+      wrap(async () => {
+        const { runChatAdd } = await import("./commands/chat.js");
+        return runChatAdd(globalEnv(), chatId, { org: opts.org, json: globalJson() });
+      })()
+    );
+
+  chat
+    .command("show <chatId>")
+    .description("Show chat metadata + your decrypted messages (oldest first)")
+    .action((chatId) =>
+      wrap(async () => {
+        const { runChatShow } = await import("./commands/chat.js");
+        return runChatShow(globalEnv(), chatId, { json: globalJson() });
+      })()
+    );
+
+  chat
+    .command("list")
+    .description("List chats anchored to a node/edge")
+    .requiredOption("--target <kind:id>", "target node:<uuid> or edge:<uuid>")
+    .action((opts) =>
+      wrap(async () => {
+        const { runChatList } = await import("./commands/chat.js");
+        return runChatList(globalEnv(), { target: opts.target, json: globalJson() });
+      })()
+    );
+
+  // ── attach ──────────────────────────────────────────────────────────────
+  const attach = program
+    .command("attach")
+    .description("Attachments anchored to a graph node/edge (server-sealed, no client crypto)");
+
+  attach
+    .command("add")
+    .description("Upload a file as an attachment (base64 JSON; MIME inferred from extension)")
+    .requiredOption("--target <kind:id>", "target node:<uuid> or edge:<uuid>")
+    .requiredOption("--file <path>", "path to the file to upload")
+    .option(
+      "--participant <org>",
+      "a participant org (repeatable); all must be parties to the target",
+      (val: string, prev: string[]) => [...prev, val],
+      [] as string[]
+    )
+    .action((opts) =>
+      wrap(async () => {
+        const { runAttachAdd } = await import("./commands/attach.js");
+        return runAttachAdd(globalEnv(), {
+          target: opts.target,
+          file: opts.file,
+          participant: opts.participant,
+          json: globalJson(),
+        });
+      })()
+    );
+
+  attach
+    .command("list")
+    .description("List attachments anchored to a node/edge")
+    .requiredOption("--target <kind:id>", "target node:<uuid> or edge:<uuid>")
+    .action((opts) =>
+      wrap(async () => {
+        const { runAttachList } = await import("./commands/attach.js");
+        return runAttachList(globalEnv(), { target: opts.target, json: globalJson() });
+      })()
+    );
+
+  attach
+    .command("get <attachmentId>")
+    .description("Download an attachment's raw bytes to a file")
+    .requiredOption("--out <path>", "where to write the downloaded bytes")
+    .action((attachmentId, opts) =>
+      wrap(async () => {
+        const { runAttachGet } = await import("./commands/attach.js");
+        return runAttachGet(globalEnv(), attachmentId, { out: opts.out, json: globalJson() });
       })()
     );
 

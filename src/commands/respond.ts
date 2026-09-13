@@ -4,12 +4,14 @@
  * detects the business-relationship endpoint from the workflow type.
  */
 
+import { readFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { ReqportClient } from "../client.js";
 import { type ReqportEnv } from "../env.js";
 import { requireResponderCredential } from "../auth/session.js";
 import {
   isBusinessRelationship,
+  isTransactionHistory,
   parseAccountArg,
   performRespond,
   readRequest,
@@ -25,6 +27,7 @@ export type RespondCliOptions = {
   account?: string[];
   payloadId?: string;
   freeText?: string;
+  statement?: string; // path to a camt.053-CA JSON statement file
   yes?: boolean;
   json?: boolean;
   show?: boolean;
@@ -56,6 +59,26 @@ export async function runRespond(
             })();
   const accounts: AccountInstrument[] | undefined = opts.account?.map(parseAccountArg);
 
+  // Transaction-history: load the camt.053-CA statement file (parsed here; the
+  // server validates it against the schema and seals it in the TEE).
+  let statement: unknown;
+  if (opts.statement !== undefined) {
+    let raw: string;
+    try {
+      raw = await readFile(opts.statement, "utf-8");
+    } catch (e) {
+      throw new Error(`Cannot read --statement file "${opts.statement}": ${(e as Error).message}`);
+    }
+    try {
+      statement = JSON.parse(raw);
+    } catch (e) {
+      throw new Error(`--statement file is not valid JSON (${opts.statement}): ${(e as Error).message}`);
+    }
+    if (typeof statement !== "object" || statement === null) {
+      throw new Error(`--statement file must contain a camt.053-CA JSON object.`);
+    }
+  }
+
   const input: RespondInput = {
     hasRelationship,
     status,
@@ -63,6 +86,7 @@ export async function runRespond(
     accounts,
     payloadId: opts.payloadId,
     freeText: opts.freeText,
+    statement,
   };
 
   // Optionally show what is being answered (default on for interactive, off with --json).
@@ -88,6 +112,11 @@ export async function runRespond(
         (hasRelationship ?? (status === "COMP")) ? "YES (auth.002 COMP)" : "NO (auth.002 NFOU)";
       line(`  → business-relationship answer: ${decision}`);
       if (accounts?.length) line(`    accounts: ${accounts.map(fmtAccount).join(", ")}`);
+    } else if (isTransactionHistory(wf.workflowType)) {
+      const s = statement as { profile?: unknown; entries?: unknown } | undefined;
+      const profile = typeof s?.profile === "string" ? s.profile : "camt.053-CA";
+      const n = Array.isArray(s?.entries) ? s.entries.length : undefined;
+      line(`  → transaction-history statement: ${profile}${n !== undefined ? ` (${n} entries)` : ""}`);
     } else {
       line(`  → generic response: ${status ?? (hasRelationship ? "COMP" : "NFOU")}`);
     }

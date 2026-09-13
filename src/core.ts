@@ -6,6 +6,7 @@
 import { ReqportApiError, ReqportClient } from "./client.js";
 import type {
   AccountInstrument,
+  ChatTarget,
   DecodedPayload,
   PayloadMetaResponse,
   ResponseResult,
@@ -16,6 +17,12 @@ import type {
 export function isBusinessRelationship(workflowType: string | undefined): boolean {
   if (!workflowType) return false;
   return workflowType.toUpperCase().includes("BUSINESS_RELATIONSHIP");
+}
+
+/** Does this workflow type use the crypto transaction-history statement endpoint? */
+export function isTransactionHistory(workflowType: string | undefined): boolean {
+  if (!workflowType) return false;
+  return workflowType.toUpperCase().includes("TRANSACTION_HISTORY");
 }
 
 /** Decode base64 plaintext into text + parsed JSON (best effort). */
@@ -123,6 +130,65 @@ export function parseAccountArg(raw: string): AccountInstrument {
   return instrument;
 }
 
+/**
+ * Parse a `--target <kind>:<id>` argument into a {kind,id} ChatTarget. The kind
+ * must be `node` or `edge`; the id is the remainder (allowing colons, though
+ * ids are normally UUIDs). Shared by the chat + attachment commands and MCP.
+ */
+export function parseTarget(raw: string): ChatTarget {
+  const idx = raw.indexOf(":");
+  if (idx <= 0) {
+    throw new Error(
+      `Invalid --target "${raw}": expected <kind>:<id> where kind is node or edge (e.g. node:<uuid>).`
+    );
+  }
+  const kind = raw.slice(0, idx).toLowerCase();
+  const id = raw.slice(idx + 1);
+  if (kind !== "node" && kind !== "edge") {
+    throw new Error(
+      `Invalid --target "${raw}": kind must be "node" or "edge" (got "${kind}").`
+    );
+  }
+  if (!id) {
+    throw new Error(`Invalid --target "${raw}": missing id after "${kind}:".`);
+  }
+  return { kind, id };
+}
+
+/** A small extension → MIME-type map for attachment uploads. */
+const MIME_BY_EXT: Record<string, string> = {
+  pdf: "application/pdf",
+  json: "application/json",
+  xml: "application/xml",
+  csv: "text/csv",
+  txt: "text/plain",
+  md: "text/markdown",
+  html: "text/html",
+  htm: "text/html",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+  zip: "application/zip",
+  doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xls: "application/vnd.ms-excel",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+};
+
+/**
+ * Infer a MIME type from a filename's extension, defaulting to
+ * application/octet-stream when unknown.
+ */
+export function mimeTypeForFilename(filename: string): string {
+  const dot = filename.lastIndexOf(".");
+  if (dot < 0 || dot === filename.length - 1) return "application/octet-stream";
+  const ext = filename.slice(dot + 1).toLowerCase();
+  return MIME_BY_EXT[ext] ?? "application/octet-stream";
+}
+
 export type RespondInput = {
   /** Business-relationship answer (true/false). Undefined for the generic path. */
   hasRelationship?: boolean;
@@ -134,10 +200,18 @@ export type RespondInput = {
   payloadId?: string;
   /** Generic-path free-text answer. */
   freeText?: string;
+  /**
+   * Transaction-history path: the parsed camt.053-CA statement object, sent
+   * inline and sealed server-side.
+   */
+  statement?: unknown;
 };
 
 export type RespondOutcome = {
-  endpoint: "business-relationship-response" | "response";
+  endpoint:
+    | "business-relationship-response"
+    | "transaction-history-response"
+    | "response";
   workflowType: string;
   requestId: string;
   submitted: Record<string, unknown>;
@@ -182,6 +256,27 @@ export async function performRespond(
       workflowType: workflow.workflowType,
       requestId: id,
       submitted: answer,
+      result,
+    };
+  }
+
+  // Crypto transaction-history path — inline camt.053-CA statement, sealed server-side.
+  if (isTransactionHistory(workflow.workflowType)) {
+    if (input.statement === undefined) {
+      throw new Error(
+        "This is a transaction-history request — pass a camt.053-CA statement (--statement <file.json>)."
+      );
+    }
+    const answer: Record<string, unknown> = { statement: input.statement };
+    if (input.note) answer.note = input.note;
+    const result = await client.submitTransactionHistoryResponse(id, answer as never);
+    return {
+      endpoint: "transaction-history-response",
+      workflowType: workflow.workflowType,
+      requestId: id,
+      // Redact the statement body from the echoed submission (it may be large
+      // and carry subject data); the server validated + sealed it.
+      submitted: { statement: "(camt.053-CA statement)", ...(input.note ? { note: input.note } : {}) },
       result,
     };
   }

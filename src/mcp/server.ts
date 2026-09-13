@@ -12,11 +12,16 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
+import { readFile, writeFile } from "node:fs/promises";
+import { basename } from "node:path";
+
 import { ReqportClient } from "../client.js";
 import { readApiKey, resolveEnv, type ReqportEnv } from "../env.js";
 import {
   decodePayloads,
+  mimeTypeForFilename,
   parseAccountArg,
+  parseTarget,
   performRespond,
   readRequest,
 } from "../core.js";
@@ -196,6 +201,34 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
   );
 
   server.registerTool(
+    "reqport_respond_transaction_history",
+    {
+      title: "Answer a crypto transaction-history request",
+      description:
+        "Answer a TRANSACTION_HISTORY_CHECK with a camt.053-CA Crypto-Asset Statement. Pass the full statement as a JSON object; Vanta validates it against the CAMT053_CA_JSON schema and seals it server-side in the TEE (no client crypto).",
+      inputSchema: {
+        env: envSchema,
+        id: z.string().describe("Request id."),
+        statement: z
+          .record(z.string(), z.unknown())
+          .describe("A camt.053-CA/v0.1 statement object (profile, statementId, period, responder, account, balances, entries)."),
+        note: z.string().optional(),
+      },
+    },
+    async ({ env, id, statement, note }) => {
+      try {
+        const outcome = await performRespond(clientFor(env ?? defaultEnv), id, {
+          statement,
+          note,
+        });
+        return ok(outcome);
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  server.registerTool(
     "reqport_respond",
     {
       title: "Answer a generic request",
@@ -221,6 +254,204 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
           payloadId,
         });
         return ok(outcome);
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  // ── Multi-org chat ─────────────────────────────────────────────────────────
+
+  const targetSchema = z
+    .string()
+    .describe('Target as "<kind>:<id>", kind ∈ {node, edge} (e.g. "node:<uuid>").');
+
+  server.registerTool(
+    "reqport_chat_create",
+    {
+      title: "Create a chat",
+      description:
+        "Open a multi-org chat anchored to a graph node/edge via POST /v1/chats. Caller and every participant must be PARTIES to the target (non-party caller → 403, non-party participant → 400). Server-sealed, no client crypto.",
+      inputSchema: {
+        env: envSchema,
+        target: targetSchema,
+        participants: z.array(z.string()).min(1).describe("Participant org ids."),
+        title: z.string().optional(),
+      },
+    },
+    async ({ env, target, participants, title }) => {
+      try {
+        const chat = await clientFor(env ?? defaultEnv).createChat({
+          target: parseTarget(target),
+          participants,
+          title,
+        });
+        return ok(chat);
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "reqport_chat_post",
+    {
+      title: "Post a chat message",
+      description:
+        "Post a message to a chat via POST /v1/chats/{id}/messages. The server seals a copy per participant (no client crypto).",
+      inputSchema: {
+        env: envSchema,
+        chatId: z.string(),
+        body: z.string().describe("The message text."),
+      },
+    },
+    async ({ env, chatId, body }) => {
+      try {
+        return ok(await clientFor(env ?? defaultEnv).postChatMessage(chatId, body));
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "reqport_chat_add",
+    {
+      title: "Add a chat participant",
+      description:
+        "Add a party org to an existing chat via POST /v1/chats/{id}/participants. The org must be a party to the target (non-party → 400).",
+      inputSchema: {
+        env: envSchema,
+        chatId: z.string(),
+        org: z.string().describe("The org id to add."),
+      },
+    },
+    async ({ env, chatId, org }) => {
+      try {
+        return ok(await clientFor(env ?? defaultEnv).addChatParticipant(chatId, org));
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "reqport_chat_show",
+    {
+      title: "Show a chat",
+      description:
+        "Read a chat via GET /v1/chats/{id}: metadata + the caller's decrypted message copies (oldest first).",
+      inputSchema: { env: envSchema, chatId: z.string() },
+    },
+    async ({ env, chatId }) => {
+      try {
+        return ok(await clientFor(env ?? defaultEnv).getChat(chatId));
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "reqport_chat_list",
+    {
+      title: "List chats",
+      description: "List chats anchored to a node/edge via GET /v1/chats?target=<kind>:<id>.",
+      inputSchema: { env: envSchema, target: targetSchema },
+    },
+    async ({ env, target }) => {
+      try {
+        return ok(await clientFor(env ?? defaultEnv).listChats(parseTarget(target)));
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  // ── Attachments ────────────────────────────────────────────────────────────
+
+  server.registerTool(
+    "reqport_attach_add",
+    {
+      title: "Upload an attachment",
+      description:
+        "Upload an attachment to a node/edge via POST /v1/attachments. Provide either a local file path (read + base64-encoded here) or contentBase64 directly. MIME type is inferred from the filename when not given. Server-sealed, no client crypto. Caller + participants must be parties to the target.",
+      inputSchema: {
+        env: envSchema,
+        target: targetSchema,
+        file: z.string().optional().describe("Local file path to read and upload."),
+        contentBase64: z.string().optional().describe("Base64 content, if not passing a file path."),
+        filename: z.string().optional(),
+        mimeType: z.string().optional(),
+        participants: z.array(z.string()).optional(),
+      },
+    },
+    async ({ env, target, file, contentBase64, filename, mimeType, participants }) => {
+      try {
+        let base64 = contentBase64;
+        let name = filename;
+        if (file) {
+          const bytes = await readFile(file);
+          base64 = bytes.toString("base64");
+          if (!name) name = basename(file);
+        }
+        if (!base64) {
+          throw new Error("Provide either a file path or contentBase64.");
+        }
+        const view = await clientFor(env ?? defaultEnv).createAttachment({
+          target: parseTarget(target),
+          filename: name,
+          mimeType: mimeType ?? (name ? mimeTypeForFilename(name) : undefined),
+          contentBase64: base64,
+          participants,
+        });
+        return ok(view);
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "reqport_attach_list",
+    {
+      title: "List attachments",
+      description:
+        "List attachments anchored to a node/edge via GET /v1/attachments?target=<kind>:<id>.",
+      inputSchema: { env: envSchema, target: targetSchema },
+    },
+    async ({ env, target }) => {
+      try {
+        return ok(await clientFor(env ?? defaultEnv).listAttachments(parseTarget(target)));
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "reqport_attach_get",
+    {
+      title: "Download an attachment",
+      description:
+        "Download an attachment's raw bytes via GET /v1/attachments/{id}/download and write them to a local path (`out`). Returns the byte count, content-type, and server filename.",
+      inputSchema: {
+        env: envSchema,
+        attachmentId: z.string(),
+        out: z.string().describe("Local path to write the downloaded bytes to."),
+      },
+    },
+    async ({ env, attachmentId, out }) => {
+      try {
+        const dl = await clientFor(env ?? defaultEnv).downloadAttachment(attachmentId);
+        await writeFile(out, dl.bytes);
+        return ok({
+          attachmentId,
+          out,
+          bytes: dl.bytes.length,
+          contentType: dl.contentType,
+          filename: dl.filename,
+        });
       } catch (e) {
         return fail(e);
       }
