@@ -84,12 +84,31 @@ export type AccountInstrument = {
   label?: string;
 };
 
+/**
+ * The relationship-type taxonomy a responder MAY attach to a substantive (true)
+ * business-relationship answer (server PR #251). Optional but recommended: it
+ * lets the requesting authority scope a targeted follow-up (data minimisation).
+ * Enum values match the server contract exactly.
+ */
+export const RELATIONSHIP_TYPES = [
+  "CUSTOMER",
+  "ACCOUNT_HOLDER",
+  "BENEFICIAL_OWNER",
+  "AUTHORISED_REPRESENTATIVE",
+  "COUNTERPARTY",
+  "FORMER_CUSTOMER",
+  "OTHER",
+] as const;
+export type RelationshipType = (typeof RELATIONSHIP_TYPES)[number];
+
 /** POST /v1/requests/{id}/business-relationship-response body. */
 export type BusinessRelationshipAnswer = {
   hasRelationship: boolean;
   payloadId?: string;
   note?: string;
   accounts?: AccountInstrument[];
+  /** Optional relationship-type tags; only meaningful on a true answer. */
+  relationshipTypes?: RelationshipType[];
 };
 
 /**
@@ -209,6 +228,51 @@ export type AttachmentDownload = {
   bytes: Buffer;
   contentType?: string;
   filename?: string;
+};
+
+// ── Pending-approval (human-in-the-loop) ────────────────────────────────────
+
+/**
+ * A held response awaiting an approver's decision (server PR #253). Fields are
+ * kept loose/forward-compatible; unknown fields are ignored.
+ */
+export type PendingResponse = {
+  id: string;
+  requestId?: string;
+  responseType?: string;
+  /** The auth.002 outcome the held response would carry (e.g. COMP | NFOU). */
+  auth002Status?: string;
+  createdAt?: string;
+  submitter?: string;
+  [k: string]: unknown;
+};
+
+/**
+ * GET /v1/responses/pending. The server may return a bare array or an
+ * {items,total} envelope; callers normalise both.
+ */
+export type PendingListResponse = {
+  items?: PendingResponse[];
+  total?: number;
+  [k: string]: unknown;
+};
+
+/** Result of an approve/reject/withdraw action on a held response. */
+export type PendingActionResult = {
+  id?: string;
+  status?: string;
+  messageId?: string;
+  requestId?: string;
+  [k: string]: unknown;
+};
+
+/**
+ * GET/PUT /v1/responses/approval-policy — which response types require approval
+ * before they are sealed + sent. The sentinel "ALL" means every response type.
+ */
+export type ApprovalPolicy = {
+  responseTypes?: string[];
+  [k: string]: unknown;
 };
 
 /** A decoded request payload plus the resolved plaintext. */

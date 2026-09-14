@@ -81,6 +81,9 @@ The stored key lives at **`%APPDATA%\qp\credential.json`** (Windows) or
 | `qp requests list [--state open] [--type <t>] [--mine]` | Discover requests via `/v1/affordances` |
 | `qp requests show <id>` | Read one request; decrypts its content in the TEE |
 | `qp respond <id> …` | Answer — auto-detects business-relationship vs generic |
+| `qp pending list` | List this org's held responses awaiting approval |
+| `qp pending approve\|reject\|withdraw <id>` | Release / reject / withdraw a held response |
+| `qp approval-policy get\|set <types>` | Show / set which response types require approval before send |
 | `qp keys status` | Show the active credential's metadata (local only) |
 | `qp keys create\|list\|revoke` | Points you to the console — key management is not a CLI operation |
 | `qp mcp` | Run the stdio MCP server |
@@ -116,6 +119,11 @@ qp respond <id> --has-relationship true \
   --account ACCOUNT:SE1234567890123:IBAN:Main \
   --account CARD:411111******1111:PAN --yes                          # auth.002 COMP
 
+# ...optionally tag the relationship (recommended — enables a targeted follow-up)
+qp respond <id> --has-relationship true \
+  --account ACCOUNT:SE1234567890123:IBAN:Main \
+  --relationship-types CUSTOMER,ACCOUNT_HOLDER --yes
+
 # Generic request
 qp respond <id> --status NFOU --yes
 qp respond <id> --status COMP --free-text "See attached statement." --yes
@@ -124,6 +132,40 @@ qp respond <id> --status COMP --free-text "See attached statement." --yes
 `--account` = `TYPE:identifier[:scheme[:label]]`, `TYPE` ∈ `ACCOUNT|WALLET|CARD`,
 repeatable. A `true`/`COMP` answer must disclose at least one account (or a
 pre-sealed `--payload-id`).
+
+`--relationship-types` = comma-separated tags attached to a **true**
+business-relationship answer (ignored/omitted on a `false` answer). Optional but
+recommended: it lets the requesting authority scope a targeted follow-up (data
+minimisation). Valid values (exact): `CUSTOMER`, `ACCOUNT_HOLDER`,
+`BENEFICIAL_OWNER`, `AUTHORISED_REPRESENTATIVE`, `COUNTERPARTY`,
+`FORMER_CUSTOMER`, `OTHER`.
+
+### Approval (human-in-the-loop)
+
+An org can require that some (or all) response types are **approved by a human**
+before they are sealed + sent. Submitted answers that match the policy are *held*
+until an approver releases them.
+
+```bash
+# See / set which response types require approval (sentinel ALL = every type)
+qp approval-policy get
+qp approval-policy set BUSINESS_RELATIONSHIP_RESPONSE
+qp approval-policy set ALL
+
+# Work the hold queue
+qp pending list                          # id, request id, response type, auth.002 status, submitter, created
+qp pending approve <id>                  # release — seal + send happens server-side
+qp pending reject  <id> --reason "…"
+qp pending withdraw <id>                 # submitter withdraws their own held response
+```
+
+`approve` / `reject` / `withdraw` are irreversible and prompt for confirmation on
+an interactive terminal; pass `-y`/`--yes` (or `--json`) to skip the prompt.
+
+Endpoints (all under the env's Vanta base, auth = your `rqk_live_` key):
+`GET /v1/responses/pending` (`responses:read`),
+`POST /v1/responses/pending/{id}/{approve|reject|withdraw}` (`responses:write`),
+`GET`/`PUT /v1/responses/approval-policy` (`responses:read`/`responses:write`).
 
 ## The `qp login` ↔ portal pairing contract
 
@@ -171,8 +213,11 @@ only. Configure the key in the server env:
 ```
 
 Tools: `reqport_doctor`, `reqport_list_requests`, `reqport_show_request`,
-`reqport_decrypt_payloads`, `reqport_respond_business_relationship`,
-`reqport_respond`.
+`reqport_decrypt_payloads`, `reqport_respond_business_relationship` (accepts
+`relationshipTypes`), `reqport_respond`, `reqport_pending_list`,
+`reqport_pending_approve`, `reqport_pending_reject`, `reqport_pending_withdraw`,
+`reqport_approval_policy_get`, `reqport_approval_policy_set`, and the chat +
+attachment tools.
 
 ## Give this to your agent
 

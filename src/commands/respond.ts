@@ -13,6 +13,7 @@ import {
   isBusinessRelationship,
   isTransactionHistory,
   parseAccountArg,
+  parseRelationshipTypes,
   performRespond,
   readRequest,
   type RespondInput,
@@ -25,6 +26,8 @@ export type RespondCliOptions = {
   status?: string; // COMP | NFOU
   note?: string;
   account?: string[];
+  relationshipTypes?: string; // comma-separated RelationshipType values
+
   payloadId?: string;
   freeText?: string;
   statement?: string; // path to a camt.053-CA JSON statement file
@@ -58,6 +61,12 @@ export async function runRespond(
               throw new Error("--status must be COMP or NFOU.");
             })();
   const accounts: AccountInstrument[] | undefined = opts.account?.map(parseAccountArg);
+  // Relationship-type tags (business-relationship path). Validate up front; they
+  // are only sent on a true answer.
+  const relationshipTypes =
+    opts.relationshipTypes !== undefined
+      ? parseRelationshipTypes(opts.relationshipTypes)
+      : undefined;
 
   // Transaction-history: load the camt.053-CA statement file (parsed here; the
   // server validates it against the schema and seals it in the TEE).
@@ -84,6 +93,7 @@ export async function runRespond(
     status,
     note: opts.note,
     accounts,
+    relationshipTypes,
     payloadId: opts.payloadId,
     freeText: opts.freeText,
     statement,
@@ -112,6 +122,9 @@ export async function runRespond(
         (hasRelationship ?? (status === "COMP")) ? "YES (auth.002 COMP)" : "NO (auth.002 NFOU)";
       line(`  → business-relationship answer: ${decision}`);
       if (accounts?.length) line(`    accounts: ${accounts.map(fmtAccount).join(", ")}`);
+      if ((hasRelationship ?? status === "COMP") && relationshipTypes?.length) {
+        line(`    relationship types: ${relationshipTypes.join(", ")}`);
+      }
     } else if (isTransactionHistory(wf.workflowType)) {
       const s = statement as { profile?: unknown; entries?: unknown } | undefined;
       const profile = typeof s?.profile === "string" ? s.profile : "camt.053-CA";
