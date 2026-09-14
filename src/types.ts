@@ -275,6 +275,176 @@ export type ApprovalPolicy = {
   [k: string]: unknown;
 };
 
+// ── FIR — Fraud Incident Response ───────────────────────────────────────────
+
+/**
+ * The FIR wire model, mirrored from the Vanta {@code FirWire} Java records.
+ *
+ * IMPORTANT — wire naming. The whole Vanta API deserializes request bodies with
+ * Jackson's DEFAULT strategy (no snake_case override anywhere), so on the WIRE
+ * these request bodies are **camelCase** — matching the Java record component
+ * names (`transactionRef`, `accountType`, `heldAmount`, `returnTo`, …), exactly
+ * like every other endpoint this CLI calls (`hasRelationship`, `docType`,
+ * `recipientOrgId`). The *sealed envelope* Vanta assembles server-side is
+ * snake_case, but that is output, not the body we send. money.amount is always a
+ * decimal STRING, never a number.
+ */
+
+/** RESPONSE per-transaction outcome enum (the deterministic HoldAssessment). */
+export const FIR_OUTCOMES = ["HELD", "PROCESSED", "PARTIAL", "NEED_INFO"] as const;
+export type FirOutcome = (typeof FIR_OUTCOMES)[number];
+
+/**
+ * A receiver-side account is ALWAYS pooled / non-personal — its accountType is
+ * constrained to this set (a fraudulent payment never lands on a natural person
+ * on the receiver side; the victim only appears on the sending-bank side).
+ */
+export const FIR_RECEIVER_ACCOUNT_TYPES = ["CLIENT_FUNDS", "OMNIBUS", "MERCHANT"] as const;
+export type FirReceiverAccountType = (typeof FIR_RECEIVER_ACCOUNT_TYPES)[number];
+
+/** Identifier of a legal entity. Base scheme LEI; overlays add national schemes. */
+export type FirEntityIdentifier = { scheme: string; value: string };
+
+/** A financial institution participating in the case. */
+export type FirInstitution = {
+  identifier: FirEntityIdentifier;
+  name?: string;
+  team?: string;
+  handlerId?: string;
+  contact?: string;
+};
+
+/** A monetary amount; amount is an exact decimal STRING (never a JSON float). */
+export type FirMoney = { amount: string; currency: string };
+
+/** A neutral account / instrument reference. */
+export type FirAccount = {
+  accountType?: string;
+  iban?: string;
+  accountNumber?: string;
+  maskedPan?: string;
+  merchantId?: string;
+  merchantName?: string;
+  label?: string;
+  national?: Record<string, unknown>;
+};
+
+/** The receiver-side account a fraudulent payment reached — pooled/non-personal. */
+export type FirReceiverAccount = FirAccount & { accountType: string };
+
+/** Card-rail detail, present when rail == CARD. */
+export type FirCardDetail = {
+  merchantId?: string;
+  merchantName?: string;
+  authorizationCode?: string;
+};
+
+/** One fraudulent inbound payment being reported. */
+export type FirTransaction = {
+  transactionRef?: string;
+  rail?: string;
+  amount?: FirMoney;
+  executedAt?: string;
+  paymentReference?: string;
+  sender?: FirAccount;
+  receiver?: FirReceiverAccount;
+  card?: FirCardDetail;
+};
+
+/** A neutral law-enforcement reference (e.g. a police case reference / DNR). */
+export type FirLawEnforcementReference = { scheme: string; reference: string };
+
+/** NOTICE payload (sending bank → receiver): report fraud + ask to hold funds. */
+export type FirNotice = {
+  externalCaseId?: string;
+  status?: string;
+  fraudType?: string;
+  muleTier?: string;
+  lawEnforcementReference?: FirLawEnforcementReference;
+  requestedAction?: string;
+  transactions: FirTransaction[];
+  freeText?: string;
+};
+
+/** One RESPONSE outcome entry (receiver → bank): per-transaction HoldAssessment. */
+export type FirResponseOutcome = {
+  transactionRef: string;
+  outcome: FirOutcome;
+  heldAmount?: FirMoney;
+  refundPossible?: boolean;
+  infoNeeded?: string[];
+  relatedTransactions?: FirTransaction[];
+  freeText?: string;
+};
+
+/** An abstract, responder-satisfiable refund verification challenge. */
+export type FirRefundVerificationChallenge = {
+  challengeType?: string;
+  description?: string;
+  national?: Record<string, unknown>;
+};
+
+/** REFUND_INSTRUCTION payload (sending bank → receiver). */
+export type FirRefundInstruction = {
+  transactionRef: string;
+  returnTo: FirAccount;
+  returnReferenceText?: string;
+  verification?: FirRefundVerificationChallenge;
+  confirmationRequested?: boolean;
+};
+
+/** POST /v1/fir/cases body — open a case with a NOTICE. */
+export type FirCreateNoticeRequest = {
+  sender: FirInstitution;
+  recipient: FirInstitution;
+  recipientOrgId: string;
+  notice: FirNotice;
+};
+
+/** POST /v1/fir/cases/{firId}/response body — per-transaction outcomes. */
+export type FirSubmitResponseRequest = {
+  sender: FirInstitution;
+  recipient: FirInstitution;
+  outcomes: FirResponseOutcome[];
+  note?: string;
+};
+
+/** POST /v1/fir/cases/{firId}/refund-instruction body. */
+export type FirRefundInstructionRequest = {
+  sender: FirInstitution;
+  recipient: FirInstitution;
+  refundInstruction: FirRefundInstruction;
+};
+
+/** POST /v1/fir/cases/{firId}/refund-confirmation body (pre-sealed RefundExecution). */
+export type FirConfirmRefundRequest = {
+  sender: FirInstitution;
+  recipient: FirInstitution;
+  payloadId: string;
+  note?: string;
+};
+
+/** POST /v1/fir/cases result — the case id + the assembled NOTICE wire envelope. */
+export type FirOpenCaseResult = {
+  firId: string;
+  status?: string;
+  notice?: unknown;
+  [k: string]: unknown;
+};
+
+/** GET /v1/fir/cases/{firId} — content-blind case metadata. */
+export type FirCaseView = {
+  firId: string;
+  workflowType?: string;
+  status?: string;
+  responseOutcome?: string;
+  requesterOrgId?: string;
+  responderOrgId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  [k: string]: unknown;
+};
+
 /** A decoded request payload plus the resolved plaintext. */
 export type DecodedPayload = {
   payloadId: string;

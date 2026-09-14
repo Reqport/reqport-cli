@@ -84,6 +84,12 @@ The stored key lives at **`%APPDATA%\qp\credential.json`** (Windows) or
 | `qp pending list` | List this org's held responses awaiting approval |
 | `qp pending approve\|reject\|withdraw <id>` | Release / reject / withdraw a held response |
 | `qp approval-policy get\|set <types>` | Show / set which response types require approval before send |
+| `qp fir list [--state open] [--mine]` | Discover **FIR** (Fraud Incident Response) cases addressed to you |
+| `qp fir show <firId>` | Read a FIR case (content-blind metadata) |
+| `qp fir notify --file <notice.json>` | Open a FIR case with a NOTICE (sending-bank side) |
+| `qp fir respond <firId> --outcome …` | Answer a NOTICE with per-transaction outcomes (receiver side) |
+| `qp fir instruct-refund <firId> …` | Instruct a refund of a held transaction (bank side) |
+| `qp fir confirm-refund <firId> --payload-id <uuid>` | Confirm a refund executed (receiver side) |
 | `qp keys status` | Show the active credential's metadata (local only) |
 | `qp keys create\|list\|revoke` | Points you to the console — key management is not a CLI operation |
 | `qp mcp` | Run the stdio MCP server |
@@ -167,6 +173,92 @@ Endpoints (all under the env's Vanta base, auth = your `rqk_live_` key):
 `POST /v1/responses/pending/{id}/{approve|reject|withdraw}` (`responses:write`),
 `GET`/`PUT /v1/responses/approval-policy` (`responses:read`/`responses:write`).
 
+## FIR — Fraud Incident Response
+
+A **FIR** is a multi-message **FI-to-FI fraud case** between a **sending bank** and
+a **receiving institution** (a client-funds holder such as an exchange). Unlike the
+single request→response families, a FIR case is one workflow instance (its id is the
+`firId`) that carries four P0 messages over time:
+
+| Step | Command | Role | Endpoint |
+|------|---------|------|----------|
+| **NOTICE** | `qp fir notify` | sending **bank** | `POST /v1/fir/cases` |
+| **RESPONSE** | `qp fir respond <firId>` | **receiver** | `POST /v1/fir/cases/{firId}/response` |
+| **REFUND_INSTRUCTION** | `qp fir instruct-refund <firId>` | sending **bank** | `POST /v1/fir/cases/{firId}/refund-instruction` |
+| **REFUND_CONFIRMATION** | `qp fir confirm-refund <firId>` | **receiver** | `POST /v1/fir/cases/{firId}/refund-confirmation` |
+| read a case | `qp fir show <firId>` | either party | `GET /v1/fir/cases/{firId}` |
+
+**Roles.** The **bank** opens the case (`notify`) and later authorises refunds
+(`instruct-refund`). The **receiver** answers per-transaction (`respond`, one of
+`HELD | PROCESSED | PARTIAL | NEED_INFO`) and confirms a refund executed
+(`confirm-refund`). Everything is sealed dual-copy server-side — the CLI stays a
+thin HTTP client (no client crypto).
+
+**Discovery.** There is **no list-cases endpoint.** A receiver discovers incoming
+cases through the **same `/v1/affordances`** discovery `qp requests list` uses — FIR
+cases are `FIR_FRAUD_CASE_V1` workflow instances addressed to the receiver.
+`qp fir list` filters that discovery down to FIR cases and labels them.
+
+```bash
+# Receiver: find + read incoming cases
+qp fir list
+qp fir show <firId>
+```
+
+### Bodies: institutions + a payload
+
+Every write body carries the two **institutions** (`sender`, `recipient`, each a
+self-declared identity object) plus a payload. Institutions come from a
+`--file <path>` / `--body <inline JSON>` base body, or inline via
+`--sender`/`--recipient`; the payload can be built with convenience flags. **Wire
+field names are camelCase** (`transactionRef`, `accountType`, `heldAmount`,
+`returnTo`, `recipientOrgId`, …) and **`money.amount` is always a decimal STRING**.
+
+```bash
+# BANK: open a case (the nested NOTICE is easiest as a file)
+qp fir notify --file ./notice.json
+#   notice.json = {"sender":{…},"recipient":{…},"recipientOrgId":"ORG_RECV",
+#                  "notice":{"status":"SUSPECTED","requestedAction":"HOLD_FUNDS",
+#                    "transactions":[{"transactionRef":"t1","rail":"INSTANT_CREDIT_TRANSFER",
+#                      "amount":{"amount":"9300","currency":"SEK"},"executedAt":"2026-08-27T09:00:00Z",
+#                      "receiver":{"accountType":"OMNIBUS","label":"klientmedel"}}]}}
+
+# RECEIVER: answer per transaction (outcomes via repeatable flags)
+qp fir respond <firId> --file ./parties.json \
+  --outcome t1:HELD:9300:SEK \
+  --outcome t2:NEED_INFO --note "one held, one needs info"
+#   --outcome <transaction_ref>:<HELD|PROCESSED|PARTIAL|NEED_INFO>[:<heldAmount>:<currency>]
+#   parties.json = {"sender":{…receiver institution…},"recipient":{…bank…}}
+
+# BANK: instruct a refund of a held transaction
+qp fir instruct-refund <firId> --file ./parties.json \
+  --transaction-ref t1 \
+  --return-iban SE45… --return-label "victim IBAN" \
+  --reference-text "fraud refund t1"
+
+# RECEIVER: confirm the refund executed (carry a pre-sealed RefundExecution payload)
+qp fir confirm-refund <firId> --file ./parties.json --payload-id <uuid>
+```
+
+**`--outcome`** validates the outcome enum client-side (listing valid values on
+error) before the POST; a held amount, when given, needs **both** amount and
+currency and is carried as a string. **`notify`** validates the required top-level
+fields and constrains each transaction's `receiver.accountType` to
+`CLIENT_FUNDS | OMNIBUS | MERCHANT` (a receiver account is pooled / non-personal).
+
+**Confirm-refund and the approval hold.** A `confirm-refund` carries a
+**pre-sealed** `RefundExecution` (docType `FIR_REFUND_JSON`) as a `--payload-id` —
+sensitive refund detail is never inlined. That lets the receiver's per-type
+[approval policy](#approval-human-in-the-loop) hold it for human review: when gated
+the call returns `PENDING_APPROVAL` (release it with `qp pending approve <id>`);
+otherwise it releases immediately.
+
+The mutating FIR commands (`notify`, `respond`, `instruct-refund`,
+`confirm-refund`) prompt for confirmation on an interactive terminal; pass
+`-y`/`--yes` (or `--json`) to skip. Scopes: `notify` / `instruct-refund` need
+`workflows:write`; `respond` / `confirm-refund` ride the response path
+(`responses:write`); `show` / `list` need `workflows:read` / discovery.
+
 ## The `qp login` ↔ portal pairing contract
 
 The portal implements the server half; the CLI implements this half. For reference:
@@ -216,7 +308,9 @@ Tools: `reqport_doctor`, `reqport_list_requests`, `reqport_show_request`,
 `reqport_decrypt_payloads`, `reqport_respond_business_relationship` (accepts
 `relationshipTypes`), `reqport_respond`, `reqport_pending_list`,
 `reqport_pending_approve`, `reqport_pending_reject`, `reqport_pending_withdraw`,
-`reqport_approval_policy_get`, `reqport_approval_policy_set`, and the chat +
+`reqport_approval_policy_get`, `reqport_approval_policy_set`, the **FIR** tools
+`reqport_fir_list`, `reqport_fir_show`, `reqport_fir_notify`, `reqport_fir_respond`,
+`reqport_fir_instruct_refund`, `reqport_fir_confirm_refund`, and the chat +
 attachment tools.
 
 ## Give this to your agent
