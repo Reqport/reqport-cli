@@ -1,6 +1,6 @@
 {
   "name": "@reqport/cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Reqport responder CLI + MCP server — discover, read, and answer content-blind data requests (e.g. Engagemangskontroll / business-relationship checks) with an rqk_live_ API key.",
   "keywords": [
     "reqport",

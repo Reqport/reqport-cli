@@ -23,6 +23,7 @@ import type {
   AttachmentDownload,
   AttachmentView,
   AttestationResponse,
+  ApprovalPolicy,
   BusinessRelationshipAnswer,
   ChatDetail,
   ChatMessageResult,
@@ -30,6 +31,9 @@ import type {
   ChatView,
   DecryptBatchResponse,
   PayloadMetaResponse,
+  PendingActionResult,
+  PendingListResponse,
+  PendingResponse,
   ResponseResult,
   ResponseSubmission,
   TransactionHistoryAnswer,
@@ -297,6 +301,81 @@ export class ReqportClient {
       `/v1/requests/${encodeURIComponent(id)}/transaction-history-response`,
       { method: "POST", idempotent: true, body: JSON.stringify(answer) }
     );
+  }
+
+  // ── Pending-approval (human-in-the-loop) ──────────────────────────────────
+
+  /**
+   * GET /v1/responses/pending — this org's held responses awaiting an approver's
+   * decision (scope responses:read). Returns either a bare array or an
+   * {items,total} envelope; callers normalise both.
+   */
+  listPendingResponses(): Promise<PendingListResponse | PendingResponse[]> {
+    return this.request<PendingListResponse | PendingResponse[]>(
+      `/v1/responses/pending`,
+      { method: "GET" }
+    );
+  }
+
+  /**
+   * POST /v1/responses/pending/{id}/approve — release a held response; the seal
+   * + send happens server-side (scope responses:write).
+   */
+  approvePendingResponse(id: string): Promise<PendingActionResult> {
+    return this.request<PendingActionResult>(
+      `/v1/responses/pending/${encodeURIComponent(id)}/approve`,
+      { method: "POST", idempotent: true }
+    );
+  }
+
+  /**
+   * POST /v1/responses/pending/{id}/reject — reject a held response, optionally
+   * with a reason (scope responses:write).
+   */
+  rejectPendingResponse(id: string, reason?: string): Promise<PendingActionResult> {
+    return this.request<PendingActionResult>(
+      `/v1/responses/pending/${encodeURIComponent(id)}/reject`,
+      {
+        method: "POST",
+        idempotent: true,
+        ...(reason ? { body: JSON.stringify({ reason }) } : {}),
+      }
+    );
+  }
+
+  /**
+   * POST /v1/responses/pending/{id}/withdraw — the submitter withdraws their own
+   * held response (scope responses:write).
+   */
+  withdrawPendingResponse(id: string): Promise<PendingActionResult> {
+    return this.request<PendingActionResult>(
+      `/v1/responses/pending/${encodeURIComponent(id)}/withdraw`,
+      { method: "POST", idempotent: true }
+    );
+  }
+
+  /**
+   * GET /v1/responses/approval-policy — which response types require approval
+   * before they are sealed + sent (scope responses:read).
+   */
+  getApprovalPolicy(): Promise<ApprovalPolicy> {
+    return this.request<ApprovalPolicy>(`/v1/responses/approval-policy`, {
+      method: "GET",
+    });
+  }
+
+  /**
+   * PUT /v1/responses/approval-policy — set the response types that require
+   * approval (scope responses:write). The sentinel "ALL" means every type.
+   *
+   * NOTE (unverified against server): body shape assumed to be
+   * {"responseTypes": [...]} — confirm against the PR #253 controller.
+   */
+  setApprovalPolicy(responseTypes: string[]): Promise<ApprovalPolicy> {
+    return this.request<ApprovalPolicy>(`/v1/responses/approval-policy`, {
+      method: "PUT",
+      body: JSON.stringify({ responseTypes }),
+    });
   }
 
   // ── Multi-org chat ─────────────────────────────────────────────────────────

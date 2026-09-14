@@ -3,7 +3,19 @@
  * server (which owns stdout for its protocol) can avoid it entirely.
  */
 
+import { createInterface } from "node:readline/promises";
 import { ReqportApiError } from "./client.js";
+
+/**
+ * Ask a yes/no question on an interactive TTY. Returns the user's answer. The
+ * caller is responsible for gating (e.g. skip when --yes/--json or non-TTY).
+ */
+export async function confirm(question: string): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const ans = (await rl.question(`${question} [y/N] `)).trim().toLowerCase();
+  rl.close();
+  return ans === "y" || ans === "yes";
+}
 
 export function printJson(value: unknown): void {
   process.stdout.write(JSON.stringify(value, null, 2) + "\n");

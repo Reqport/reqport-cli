@@ -26,9 +26,9 @@ import {
   readRequest,
 } from "../core.js";
 import { explainError } from "../ui.js";
-import type { AccountInstrument } from "../types.js";
+import { RELATIONSHIP_TYPES, type AccountInstrument, type RelationshipType } from "../types.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.3.0";
 
 const envSchema = z
   .enum(["sandbox", "uat", "prod"])
@@ -43,6 +43,14 @@ const accountSchema = z
     label: z.string().optional(),
   })
   .describe("A typed instrument disclosed with a substantive answer.");
+
+const relationshipTypesSchema = z
+  .array(z.enum(RELATIONSHIP_TYPES))
+  .optional()
+  .describe(
+    "Optional relationship-type tags for a true business-relationship answer " +
+      "(ignored when hasRelationship is false). Recommended: enables a targeted follow-up (data minimisation)."
+  );
 
 /**
  * The MCP server is API-key-only by design: an agent cannot complete an
@@ -181,15 +189,17 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
         id: z.string().describe("Request id."),
         hasRelationship: z.boolean(),
         accounts: z.array(accountSchema).optional(),
+        relationshipTypes: relationshipTypesSchema,
         note: z.string().optional(),
         payloadId: z.string().optional().describe("A pre-sealed BUSINESS_RELATIONSHIP_JSON answer document."),
       },
     },
-    async ({ env, id, hasRelationship, accounts, note, payloadId }) => {
+    async ({ env, id, hasRelationship, accounts, relationshipTypes, note, payloadId }) => {
       try {
         const outcome = await performRespond(clientFor(env ?? defaultEnv), id, {
           hasRelationship,
           accounts: accounts as AccountInstrument[] | undefined,
+          relationshipTypes: relationshipTypes as RelationshipType[] | undefined,
           note,
           payloadId,
         });
@@ -452,6 +462,121 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
           contentType: dl.contentType,
           filename: dl.filename,
         });
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  // ── Pending-approval (human-in-the-loop) ───────────────────────────────────
+
+  server.registerTool(
+    "reqport_pending_list",
+    {
+      title: "List held responses",
+      description:
+        "List this org's responses held for approval via GET /v1/responses/pending (scope responses:read). Returns id, requestId, responseType, auth002Status, submitter, createdAt.",
+      inputSchema: { env: envSchema },
+    },
+    async ({ env }) => {
+      try {
+        return ok(await clientFor(env ?? defaultEnv).listPendingResponses());
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "reqport_pending_approve",
+    {
+      title: "Approve a held response",
+      description:
+        "Release a held response via POST /v1/responses/pending/{id}/approve (scope responses:write). The seal + send happens server-side. Irreversible.",
+      inputSchema: { env: envSchema, id: z.string().describe("Pending response id.") },
+    },
+    async ({ env, id }) => {
+      try {
+        return ok(await clientFor(env ?? defaultEnv).approvePendingResponse(id));
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "reqport_pending_reject",
+    {
+      title: "Reject a held response",
+      description:
+        "Reject a held response via POST /v1/responses/pending/{id}/reject (scope responses:write), optionally with a reason.",
+      inputSchema: {
+        env: envSchema,
+        id: z.string().describe("Pending response id."),
+        reason: z.string().optional(),
+      },
+    },
+    async ({ env, id, reason }) => {
+      try {
+        return ok(await clientFor(env ?? defaultEnv).rejectPendingResponse(id, reason));
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "reqport_pending_withdraw",
+    {
+      title: "Withdraw a held response",
+      description:
+        "Withdraw your own held response before it is approved via POST /v1/responses/pending/{id}/withdraw (scope responses:write).",
+      inputSchema: { env: envSchema, id: z.string().describe("Pending response id.") },
+    },
+    async ({ env, id }) => {
+      try {
+        return ok(await clientFor(env ?? defaultEnv).withdrawPendingResponse(id));
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  // ── Approval policy ─────────────────────────────────────────────────────────
+
+  server.registerTool(
+    "reqport_approval_policy_get",
+    {
+      title: "Get the approval policy",
+      description:
+        "Show which response types require approval before send via GET /v1/responses/approval-policy (scope responses:read).",
+      inputSchema: { env: envSchema },
+    },
+    async ({ env }) => {
+      try {
+        return ok(await clientFor(env ?? defaultEnv).getApprovalPolicy());
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "reqport_approval_policy_set",
+    {
+      title: "Set the approval policy",
+      description:
+        "Set the response types that require approval via PUT /v1/responses/approval-policy (scope responses:write). Pass the sentinel [\"ALL\"] for every type, or [] for none.",
+      inputSchema: {
+        env: envSchema,
+        responseTypes: z
+          .array(z.string())
+          .describe('Response types requiring approval, or ["ALL"] for every type, or [] for none.'),
+      },
+    },
+    async ({ env, responseTypes }) => {
+      try {
+        return ok(await clientFor(env ?? defaultEnv).setApprovalPolicy(responseTypes));
       } catch (e) {
         return fail(e);
       }

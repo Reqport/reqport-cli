@@ -4,13 +4,15 @@
  */
 
 import { ReqportApiError, ReqportClient } from "./client.js";
-import type {
-  AccountInstrument,
-  ChatTarget,
-  DecodedPayload,
-  PayloadMetaResponse,
-  ResponseResult,
-  WorkflowInstanceResponse,
+import {
+  RELATIONSHIP_TYPES,
+  type AccountInstrument,
+  type ChatTarget,
+  type DecodedPayload,
+  type PayloadMetaResponse,
+  type RelationshipType,
+  type ResponseResult,
+  type WorkflowInstanceResponse,
 } from "./types.js";
 
 /** Does this workflow type use the purpose-built business-relationship endpoint? */
@@ -131,6 +133,28 @@ export function parseAccountArg(raw: string): AccountInstrument {
 }
 
 /**
+ * Parse a comma-separated `--relationship-types` argument into a validated list
+ * of RelationshipType values. Values are upper-cased and de-duplicated; an
+ * unknown value throws an error that lists the valid values. Empty/whitespace
+ * entries are dropped. Shared by the CLI respond command (the MCP tool validates
+ * via a zod enum instead).
+ */
+export function parseRelationshipTypes(raw: string): RelationshipType[] {
+  const seen = new Set<RelationshipType>();
+  for (const part of raw.split(",")) {
+    const v = part.trim().toUpperCase();
+    if (v === "") continue;
+    if (!(RELATIONSHIP_TYPES as readonly string[]).includes(v)) {
+      throw new Error(
+        `Invalid --relationship-types value "${part.trim()}". Valid values: ${RELATIONSHIP_TYPES.join(", ")}.`
+      );
+    }
+    seen.add(v as RelationshipType);
+  }
+  return [...seen];
+}
+
+/**
  * Parse a `--target <kind>:<id>` argument into a {kind,id} ChatTarget. The kind
  * must be `node` or `edge`; the id is the remainder (allowing colons, though
  * ids are normally UUIDs). Shared by the chat + attachment commands and MCP.
@@ -196,6 +220,11 @@ export type RespondInput = {
   status?: "COMP" | "NFOU";
   note?: string;
   accounts?: AccountInstrument[];
+  /**
+   * Business-relationship path: optional relationship-type tags on a true answer
+   * (ignored/omitted when hasRelationship is false).
+   */
+  relationshipTypes?: RelationshipType[];
   /** A pre-sealed answer document payloadId (advanced). */
   payloadId?: string;
   /** Generic-path free-text answer. */
@@ -244,6 +273,10 @@ export async function performRespond(
     if (hasRelationship) {
       if (input.accounts && input.accounts.length > 0) answer.accounts = input.accounts;
       if (input.payloadId) answer.payloadId = input.payloadId;
+      // Optional relationship-type tags (only on a true answer, only when non-empty).
+      if (input.relationshipTypes && input.relationshipTypes.length > 0) {
+        answer.relationshipTypes = input.relationshipTypes;
+      }
       if (!answer.accounts && !answer.payloadId) {
         throw new Error(
           "A true answer must disclose at least one --account (inline typed instrument) or a --payload-id (pre-sealed answer document)."

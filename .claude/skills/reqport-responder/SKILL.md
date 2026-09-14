@@ -93,6 +93,22 @@ has run.
    `ACCOUNT|WALLET|CARD`. Repeat for multiple instruments. A `true` answer must
    disclose at least one `--account` (or a pre-sealed `--payload-id`).
 
+   On a `true` answer you may also tag the relationship (optional but
+   recommended — it lets the authority scope a targeted follow-up / data
+   minimisation):
+   ```bash
+   qp --env sandbox respond <REQUEST_ID> --has-relationship true \
+     --account ACCOUNT:SE1234567890123:IBAN:Main \
+     --relationship-types CUSTOMER,ACCOUNT_HOLDER --yes
+   ```
+   Valid values: `CUSTOMER`, `ACCOUNT_HOLDER`, `BENEFICIAL_OWNER`,
+   `AUTHORISED_REPRESENTATIVE`, `COUNTERPARTY`, `FORMER_CUSTOMER`, `OTHER`.
+
+   If your org runs a **human-in-the-loop approval policy**, a submitted answer
+   may be *held* instead of sent. Manage the hold queue with
+   `qp pending list|approve|reject|withdraw` and the policy with
+   `qp approval-policy get|set <types|ALL>`.
+
 4. **Verify**: re-run `qp requests show <REQUEST_ID>` and confirm the workflow
    moved to `RESPONDED` with outcome `NFOU` (false) or `NORMAL` (true). Add
    `--json` to any command for machine-readable output you can assert on.
@@ -107,8 +123,11 @@ npx @reqport/cli mcp        # REQPORT_API_KEY + REQPORT_ENV from the environment
 ```
 
 Tools: `reqport_doctor`, `reqport_list_requests`, `reqport_show_request`,
-`reqport_decrypt_payloads`, `reqport_respond_business_relationship`,
-`reqport_respond`. Each accepts an optional `env`; the credential comes from the
+`reqport_decrypt_payloads`, `reqport_respond_business_relationship` (accepts
+`relationshipTypes`), `reqport_respond`, plus the human-in-the-loop tools
+`reqport_pending_list`, `reqport_pending_approve`, `reqport_pending_reject`,
+`reqport_pending_withdraw`, `reqport_approval_policy_get`, and
+`reqport_approval_policy_set`. Each accepts an optional `env`; the credential comes from the
 server process environment. The MCP server is **API-key-only** — `qp login` is a
 human/CLI concern and is not exposed as a tool.
 

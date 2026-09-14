@@ -11,7 +11,7 @@ import { Command } from "commander";
 import { resolveEnv } from "./env.js";
 import { explainError, err } from "./ui.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.3.0";
 
 async function main(): Promise<void> {
   const program = new Command();
@@ -134,6 +134,10 @@ async function main(): Promise<void> {
       (val: string, prev: string[]) => [...prev, val],
       [] as string[]
     )
+    .option(
+      "--relationship-types <list>",
+      "business-relationship: comma-separated relationship types (CUSTOMER, ACCOUNT_HOLDER, BENEFICIAL_OWNER, AUTHORISED_REPRESENTATIVE, COUNTERPARTY, FORMER_CUSTOMER, OTHER) — optional but recommended on a true answer"
+    )
     .option("--note <text>", "optional free-text note (auth.002 AddtlInf)")
     .option("--free-text <text>", "generic response free-text answer")
     .option("--payload-id <uuid>", "advanced: a pre-sealed answer document payloadId")
@@ -150,6 +154,7 @@ async function main(): Promise<void> {
           hasRelationship: opts.hasRelationship,
           status: opts.status,
           account: opts.account,
+          relationshipTypes: opts.relationshipTypes,
           note: opts.note,
           freeText: opts.freeText,
           payloadId: opts.payloadId,
@@ -158,6 +163,84 @@ async function main(): Promise<void> {
           yes: opts.yes,
           json: globalJson(),
         });
+      })()
+    );
+
+  // ── pending (human-in-the-loop approval queue) ─────────────────────────────
+  const pending = program
+    .command("pending")
+    .description("Human-in-the-loop queue for held responder answers (approve / reject / withdraw)");
+
+  pending
+    .command("list")
+    .description("List this org's held responses awaiting approval (GET /v1/responses/pending)")
+    .action(() =>
+      wrap(async () => {
+        const { runPendingList } = await import("./commands/pending.js");
+        return runPendingList(globalEnv(), { json: globalJson() });
+      })()
+    );
+
+  pending
+    .command("approve <id>")
+    .description("Release a held response — seal + send happens server-side")
+    .option("-y, --yes", "skip the confirmation prompt", false)
+    .action((id, opts) =>
+      wrap(async () => {
+        const { runPendingApprove } = await import("./commands/pending.js");
+        return runPendingApprove(globalEnv(), id, { yes: opts.yes, json: globalJson() });
+      })()
+    );
+
+  pending
+    .command("reject <id>")
+    .description("Reject a held response")
+    .option("--reason <text>", "optional reason for the rejection")
+    .option("-y, --yes", "skip the confirmation prompt", false)
+    .action((id, opts) =>
+      wrap(async () => {
+        const { runPendingReject } = await import("./commands/pending.js");
+        return runPendingReject(globalEnv(), id, {
+          reason: opts.reason,
+          yes: opts.yes,
+          json: globalJson(),
+        });
+      })()
+    );
+
+  pending
+    .command("withdraw <id>")
+    .description("Withdraw your own held response before it is approved")
+    .option("-y, --yes", "skip the confirmation prompt", false)
+    .action((id, opts) =>
+      wrap(async () => {
+        const { runPendingWithdraw } = await import("./commands/pending.js");
+        return runPendingWithdraw(globalEnv(), id, { yes: opts.yes, json: globalJson() });
+      })()
+    );
+
+  // ── approval-policy ────────────────────────────────────────────────────────
+  const approvalPolicy = program
+    .command("approval-policy")
+    .description("Show / set which response types require approval before send");
+
+  approvalPolicy
+    .command("get")
+    .description("Show which response types require approval (GET /v1/responses/approval-policy)")
+    .action(() =>
+      wrap(async () => {
+        const { runApprovalPolicyGet } = await import("./commands/approvalPolicy.js");
+        return runApprovalPolicyGet(globalEnv(), { json: globalJson() });
+      })()
+    );
+
+  approvalPolicy
+    .command("set <types>")
+    .description("Set the response types that require approval — comma-separated, or the sentinel ALL")
+    .action((types) =>
+      wrap(async () => {
+        const { runApprovalPolicySet } = await import("./commands/approvalPolicy.js");
+        return runApprovalPolicySet(globalEnv(), types, { json: globalJson() });
       })()
     );
 
