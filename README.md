@@ -309,32 +309,40 @@ client-side before the POST.
 
 ### Lifecycle (`update` / `close`)
 
-Either party can post a lifecycle message on an open case. Unlike the other FIR
-bodies, the **`update` / `close` bodies are snake_case** on the wire and carry
-**no `sender`/`recipient`** — the case parties are already fixed by the workflow
-instance.
+Either party can post a lifecycle message on an open case. Like every other FIR
+write, the body carries the two **institutions** (`sender`/`recipient`, from
+`--file`/`--body` or inline `--sender`/`--recipient`) plus a **nested payload**
+under `update` / `close`; the payload fields are **snake_case** (`update_type`,
+`law_enforcement_reference`, `free_text`, `reason`):
+
+```
+POST …/{firId}/update   { sender, recipient, update: { update_type, law_enforcement_reference?, status?, transactions?, free_text? } }
+POST …/{firId}/close    { sender, recipient, close:  { reason, free_text? } }
+```
 
 ```bash
-# EITHER PARTY: correct or extend the case (six update_types)
-qp fir update <firId> --update-type STATUS_CHANGE --status CONFIRMED
-qp fir update <firId> --update-type LAW_ENFORCEMENT_REFERENCE_ADDED \
+# EITHER PARTY: correct or extend the case (six update_types); parties from --file
+qp fir update <firId> --file ./parties.json --update-type STATUS_CHANGE --status CONFIRMED
+qp fir update <firId> --file ./parties.json --update-type LAW_ENFORCEMENT_REFERENCE_ADDED \
   --law-enforcement-scheme "SE-POLICE" --law-enforcement-reference "DNR-2026-123"
-qp fir update <firId> --update-type ADDITIONAL_TRANSACTIONS \
+qp fir update <firId> --file ./parties.json --update-type ADDITIONAL_TRANSACTIONS \
   --transactions '[{"transactionRef":"t3","amount":{"amount":"500","currency":"SEK"}}]'
-qp fir update <firId> --update-type QUESTION --free-text "Any hold on t2 yet?"
+qp fir update <firId> --sender '{…}' --recipient '{…}' \
+  --update-type QUESTION --free-text "Any hold on t2 yet?"
 #   --update-type is CORRECTION | LAW_ENFORCEMENT_REFERENCE_ADDED |
 #     ADDITIONAL_TRANSACTIONS | STATUS_CHANGE | QUESTION | ANSWER (validated)
 #   STATUS_CHANGE REQUIRES --status (SUSPECTED|STRONG_SUSPICION|CONFIRMED|CLEARED)
 
 # EITHER PARTY: close the case with a terminal reason
-qp fir close <firId> --reason REFUNDED --free-text "full amount returned"
+qp fir close <firId> --file ./parties.json --reason REFUNDED --free-text "full amount returned"
 #   --reason is REFUNDED | NOT_RECOVERABLE | NO_MATCH | WITHDRAWN | OTHER (validated)
 ```
 
 `--update-type` / `--status` / `--reason` are validated client-side (listing the
 valid values on error) before the POST, and `update --update-type STATUS_CHANGE`
 fails fast when `--status` is omitted. Both bodies can also be supplied whole via
-`--file` / `--body` (snake_case keys); flags override.
+`--file` / `--body` (`{sender, recipient, update|close:{…}}`); flags override the
+payload fields.
 
 The mutating FIR commands (`notify`, `respond`, `instruct-refund`,
 `confirm-refund`, `identity-request`, `identity-respond`, `update`, `close`)

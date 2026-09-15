@@ -161,11 +161,13 @@ qp --env sandbox fir identity-request <firId> --file ./parties.json \
 qp --env sandbox fir identity-respond <firId> --file ./identity-subject.json \
   --record-status FOUND --transaction-ref t1 --yes
 
-# Either party: post a lifecycle UPDATE (snake_case body, no sender/recipient)
-qp --env sandbox fir update <firId> --update-type STATUS_CHANGE --status CONFIRMED --yes
+# Either party: post a lifecycle UPDATE (parties + nested snake_case payload)
+qp --env sandbox fir update <firId> --file ./parties.json \
+  --update-type STATUS_CHANGE --status CONFIRMED --yes
 
 # Either party: close the case with a terminal reason
-qp --env sandbox fir close <firId> --reason REFUNDED --free-text "full amount returned" --yes
+qp --env sandbox fir close <firId> --file ./parties.json \
+  --reason REFUNDED --free-text "full amount returned" --yes
 ```
 
 Body notes: each write body carries the two institutions (`sender`/`recipient`, from
@@ -192,9 +194,10 @@ then returns `PENDING_APPROVAL`). Enums are validated client-side before the POS
 LAW_ENFORCEMENT_REFERENCE_ADDED | ADDITIONAL_TRANSACTIONS | STATUS_CHANGE |
 QUESTION | ANSWER`); `STATUS_CHANGE` also requires `--status` (`SUSPECTED |
 STRONG_SUSPICION | CONFIRMED | CLEARED`). `close` needs `--reason` (`REFUNDED |
-NOT_RECOVERABLE | NO_MATCH | WITHDRAWN | OTHER`). Unlike the other FIR bodies these
-two are **snake_case** and carry **no `sender`/`recipient`**. Enums are validated
-client-side before the POST.
+NOT_RECOVERABLE | NO_MATCH | WITHDRAWN | OTHER`). Both carry the two institutions
+(`sender`/`recipient`, like every FIR write) plus a **nested snake_case payload**
+under `update` / `close` (`{sender, recipient, update|close:{…}}`). Enums are
+validated client-side before the POST.
 
 ## KYC / CDD — Customer Due Diligence response
 

@@ -563,11 +563,12 @@ export type FirIdentityResponseRequest = {
 // law-enforcement reference, extra transactions, a fraud-status change, or a
 // question/answer), and CLOSE the case with a terminal reason.
 //
-// IMPORTANT — wire naming. UNLIKE the other FIR bodies (camelCase), the
-// update/close request bodies are **snake_case** on the wire (update_type,
-// law_enforcement_reference, free_text, reason) — matching the vanta DTO — and
-// they carry NO sender/recipient: the case parties are already fixed by the
-// workflow instance. Enums are validated client-side.
+// Like every other FIR write, the request body carries the two institutions
+// (sender/recipient — descriptive Institution objects sealed into the envelope;
+// vanta authorizes on the authenticated caller, not on body.sender) plus a NESTED
+// payload — here under `update` / `close`. The PAYLOAD fields are **snake_case**
+// on the wire (update_type, law_enforcement_reference, free_text, reason) matching
+// the vanta DTO. Enums are validated client-side.
 
 /** UPDATE update_type enum — the kind of lifecycle update being posted. */
 export const FIR_UPDATE_TYPES = [
@@ -600,14 +601,14 @@ export const FIR_CLOSE_REASONS = [
 export type FirCloseReason = (typeof FIR_CLOSE_REASONS)[number];
 
 /**
- * POST /v1/fir/cases/{firId}/update body — snake_case on the wire. update_type is
- * mandatory; law_enforcement_reference / status / transactions / free_text are
- * optional. `status` is only meaningful with update_type=STATUS_CHANGE.
- * `transactions` (for ADDITIONAL_TRANSACTIONS) is passed through verbatim from the
- * caller's JSON — the contract pins only the top-level keys, so its element shape
- * is not re-cast here.
+ * UPDATE payload (snake_case) — nested under `update` in the request body.
+ * update_type is mandatory; law_enforcement_reference / status / transactions /
+ * free_text are optional. `status` is only meaningful with
+ * update_type=STATUS_CHANGE. `transactions` (for ADDITIONAL_TRANSACTIONS) is
+ * passed through verbatim from the caller's JSON — the contract pins only these
+ * keys, so its element shape is not re-cast here.
  */
-export type FirUpdateRequest = {
+export type FirUpdate = {
   update_type: FirUpdateType;
   law_enforcement_reference?: FirLawEnforcementReference;
   status?: FirFraudStatus;
@@ -615,10 +616,24 @@ export type FirUpdateRequest = {
   free_text?: string;
 };
 
-/** POST /v1/fir/cases/{firId}/close body — snake_case on the wire. reason is mandatory. */
-export type FirCloseRequest = {
+/** POST /v1/fir/cases/{firId}/update body — parties + the nested UPDATE payload. */
+export type FirUpdateRequest = {
+  sender: FirInstitution;
+  recipient: FirInstitution;
+  update: FirUpdate;
+};
+
+/** CLOSE payload (snake_case) — nested under `close` in the request body. reason is mandatory. */
+export type FirClose = {
   reason: FirCloseReason;
   free_text?: string;
+};
+
+/** POST /v1/fir/cases/{firId}/close body — parties + the nested CLOSE payload. */
+export type FirCloseRequest = {
+  sender: FirInstitution;
+  recipient: FirInstitution;
+  close: FirClose;
 };
 
 // ── KYC / CDD — Customer Due Diligence response ──────────────────────────────

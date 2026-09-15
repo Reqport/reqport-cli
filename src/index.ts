@@ -603,7 +603,9 @@ async function main(): Promise<void> {
     .option("--law-enforcement-reference <ref>", "law-enforcement reference value (e.g. the DNR / case reference)")
     .option("--transactions <json>", "additional transactions as an inline JSON array (for ADDITIONAL_TRANSACTIONS)")
     .option("--free-text <text>", "optional free-text (e.g. the QUESTION / ANSWER body)")
-    .option("--file <path>", "JSON file with the full snake_case body {update_type, …}")
+    .option("--sender <json>", "this message's sender institution as inline JSON (else from --file)")
+    .option("--recipient <json>", "this message's recipient institution as inline JSON (else from --file)")
+    .option("--file <path>", "JSON file with the full body {sender, recipient, update:{update_type, …}}")
     .option("--body <json>", "the same body inline as a JSON string")
     .option("-y, --yes", "skip the confirmation prompt", false)
     .action((firId, opts) =>
@@ -612,6 +614,8 @@ async function main(): Promise<void> {
         return runFirUpdate(globalEnv(), firId, {
           file: opts.file,
           body: opts.body,
+          sender: opts.sender,
+          recipient: opts.recipient,
           updateType: opts.updateType,
           status: opts.status,
           lawEnforcementScheme: opts.lawEnforcementScheme,
@@ -632,7 +636,9 @@ async function main(): Promise<void> {
       "REFUNDED | NOT_RECOVERABLE | NO_MATCH | WITHDRAWN | OTHER (required)"
     )
     .option("--free-text <text>", "optional free-text closing note")
-    .option("--file <path>", "JSON file with the full snake_case body {reason, free_text}")
+    .option("--sender <json>", "this message's sender institution as inline JSON (else from --file)")
+    .option("--recipient <json>", "this message's recipient institution as inline JSON (else from --file)")
+    .option("--file <path>", "JSON file with the full body {sender, recipient, close:{reason, free_text}}")
     .option("--body <json>", "the same body inline as a JSON string")
     .option("-y, --yes", "skip the confirmation prompt", false)
     .action((firId, opts) =>
@@ -641,6 +647,8 @@ async function main(): Promise<void> {
         return runFirClose(globalEnv(), firId, {
           file: opts.file,
           body: opts.body,
+          sender: opts.sender,
+          recipient: opts.recipient,
           reason: opts.reason,
           freeText: opts.freeText,
           yes: opts.yes,

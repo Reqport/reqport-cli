@@ -40,6 +40,7 @@ import {
 } from "../core.js";
 import { confirm, line, printJson, table } from "../ui.js";
 import type {
+  FirClose,
   FirCloseReason,
   FirCloseRequest,
   FirConfirmRefundRequest,
@@ -57,6 +58,7 @@ import type {
   FirRefundInstructionRequest,
   FirResponseOutcome,
   FirSubmitResponseRequest,
+  FirUpdate,
   FirUpdateRequest,
   FirUpdateType,
 } from "../types.js";
@@ -656,6 +658,8 @@ export async function runFirIdentityRespond(
 export type FirUpdateOptions = {
   file?: string;
   body?: string;
+  sender?: string;
+  recipient?: string;
   updateType?: string;
   lawEnforcementScheme?: string;
   lawEnforcementReference?: string;
@@ -673,19 +677,24 @@ export async function runFirUpdate(
 ): Promise<number> {
   const parsed = (await readJsonInput({ file: opts.file, body: opts.body }, "update")) ?? {};
   const base = asRecord(parsed, "update body");
+  const { sender, recipient } = resolveParties(base, opts.sender, opts.recipient);
+
+  // The UPDATE payload may live under `update` (nested) in the base body or be the
+  // top-level object (a bare payload); flags override individual fields.
+  const uBase = (base.update as Record<string, unknown> | undefined) ?? base;
 
   const updateType = (opts.updateType ??
-    (typeof base.update_type === "string" ? base.update_type : undefined)) as
+    (typeof uBase.update_type === "string" ? uBase.update_type : undefined)) as
     | FirUpdateType
     | undefined;
   const status = (opts.status ??
-    (typeof base.status === "string" ? base.status : undefined)) as FirFraudStatus | undefined;
+    (typeof uBase.status === "string" ? uBase.status : undefined)) as FirFraudStatus | undefined;
   const freeText =
-    opts.freeText ?? (typeof base.free_text === "string" ? base.free_text : undefined);
+    opts.freeText ?? (typeof uBase.free_text === "string" ? uBase.free_text : undefined);
 
   // law_enforcement_reference {scheme, reference}: granular flags build/override it,
-  // else fall back to the base body's object.
-  let lawRef = base.law_enforcement_reference as FirLawEnforcementReference | undefined;
+  // else fall back to the base payload's object.
+  let lawRef = uBase.law_enforcement_reference as FirLawEnforcementReference | undefined;
   if (opts.lawEnforcementScheme || opts.lawEnforcementReference) {
     lawRef = {
       scheme: opts.lawEnforcementScheme ?? lawRef?.scheme ?? "",
@@ -693,15 +702,15 @@ export async function runFirUpdate(
     };
   }
 
-  // transactions (for ADDITIONAL_TRANSACTIONS): inline JSON array wins, else base body.
+  // transactions (for ADDITIONAL_TRANSACTIONS): inline JSON array wins, else base payload.
   const transactions =
     parseInlineJson<unknown[]>(opts.transactions, "transactions") ??
-    (Array.isArray(base.transactions) ? (base.transactions as unknown[]) : undefined);
+    (Array.isArray(uBase.transactions) ? (uBase.transactions as unknown[]) : undefined);
   if (transactions !== undefined && !Array.isArray(transactions)) {
     throw new Error("--transactions must be a JSON array.");
   }
 
-  const body: FirUpdateRequest = {
+  const update: FirUpdate = {
     update_type: updateType as FirUpdateType,
     ...(lawRef ? { law_enforcement_reference: lawRef } : {}),
     ...(status ? { status } : {}),
@@ -709,10 +718,16 @@ export async function runFirUpdate(
     ...(freeText ? { free_text: freeText } : {}),
   };
 
+  const body: FirUpdateRequest = {
+    sender: sender as FirInstitution,
+    recipient: recipient as FirInstitution,
+    update,
+  };
+
   if (!opts.json) {
     line(`Posting an UPDATE to FIR case ${firId}:`);
-    line(`  update_type: ${body.update_type ?? "(missing)"}`);
-    if (body.status) line(`  status:      ${body.status}`);
+    line(`  update_type: ${update.update_type ?? "(missing)"}`);
+    if (update.status) line(`  status:      ${update.status}`);
     if (lawRef) line(`  law ref:     ${lawRef.scheme || "?"}:${lawRef.reference || "?"}`);
     if (transactions && transactions.length > 0) {
       line(`  +transactions: ${transactions.length}`);
@@ -727,7 +742,7 @@ export async function runFirUpdate(
     printJson(result);
     return 0;
   }
-  line(`UPDATE posted on FIR case ${firId} (${body.update_type}).`);
+  line(`UPDATE posted on FIR case ${firId} (${update.update_type}).`);
   line("Verify:  qp fir show " + firId);
   return 0;
 }
@@ -737,6 +752,8 @@ export async function runFirUpdate(
 export type FirCloseOptions = {
   file?: string;
   body?: string;
+  sender?: string;
+  recipient?: string;
   reason?: string;
   freeText?: string;
   yes?: boolean;
@@ -750,20 +767,31 @@ export async function runFirClose(
 ): Promise<number> {
   const parsed = (await readJsonInput({ file: opts.file, body: opts.body }, "close")) ?? {};
   const base = asRecord(parsed, "close body");
+  const { sender, recipient } = resolveParties(base, opts.sender, opts.recipient);
+
+  // The CLOSE payload may live under `close` (nested) in the base body or be the
+  // top-level object (a bare payload); flags override individual fields.
+  const cBase = (base.close as Record<string, unknown> | undefined) ?? base;
 
   const reason = (opts.reason ??
-    (typeof base.reason === "string" ? base.reason : undefined)) as FirCloseReason | undefined;
+    (typeof cBase.reason === "string" ? cBase.reason : undefined)) as FirCloseReason | undefined;
   const freeText =
-    opts.freeText ?? (typeof base.free_text === "string" ? base.free_text : undefined);
+    opts.freeText ?? (typeof cBase.free_text === "string" ? cBase.free_text : undefined);
 
-  const body: FirCloseRequest = {
+  const close: FirClose = {
     reason: reason as FirCloseReason,
     ...(freeText ? { free_text: freeText } : {}),
   };
 
+  const body: FirCloseRequest = {
+    sender: sender as FirInstitution,
+    recipient: recipient as FirInstitution,
+    close,
+  };
+
   if (!opts.json) {
     line(`Closing FIR case ${firId}:`);
-    line(`  reason: ${body.reason ?? "(missing)"}`);
+    line(`  reason: ${close.reason ?? "(missing)"}`);
     if (freeText) line(`  free_text: “${freeText}”`);
     line("");
   }
@@ -774,7 +802,7 @@ export async function runFirClose(
     printJson(result);
     return 0;
   }
-  line(`FIR case ${firId} closed (${body.reason}).`);
+  line(`FIR case ${firId} closed (${close.reason}).`);
   line("Verify:  qp fir show " + firId);
   return 0;
 }
