@@ -445,6 +445,118 @@ export type FirCaseView = {
   [k: string]: unknown;
 };
 
+// ── FIR identity-exchange (identity-request / identity-response) ──────────────
+//
+// Two later messages on a FIR case: a party asks for the identity behind a
+// fraud-transaction counterparty (identity-request), and the counterparty
+// returns the KYC/IVMS101 identity core (identity-response). Like the rest of
+// FIR, these bodies are camelCase on the wire (Jackson default). The identity
+// subject is the same natural/legal-person core as KYC/CDD, but camelCase here.
+
+/** Which counterparty the identity is about (relative to the fraud transaction). */
+export const FIR_ABOUT_PARTIES = ["ORDER_CUSTOMER", "ORIGINATOR"] as const;
+export type FirAboutParty = (typeof FIR_ABOUT_PARTIES)[number];
+
+/** identity-response record status (FOUND → auth.002 COMP; NOT_FOUND → NFOU). */
+export const FIR_IDENTITY_RECORD_STATUSES = ["FOUND", "NOT_FOUND"] as const;
+export type FirIdentityRecordStatus = (typeof FIR_IDENTITY_RECORD_STATUSES)[number];
+
+/**
+ * The legal basis for an identity request. At least one field must be present
+ * (server gate mirrored client-side): a policy token, or a {scheme, reference}
+ * citation, or a free-text description.
+ */
+export type FirLegalBasis = {
+  token?: string;
+  scheme?: string;
+  reference?: string;
+  description?: string;
+};
+
+/** A scheme-qualified identifier {scheme, value} (camelCase FIR variant). */
+export type FirIdentitySchemeValue = { scheme?: string; value?: string };
+
+/** IVMS101-aligned natural-person name: primary (family) + optional secondary (given). */
+export type FirNaturalPersonName = { primary?: string; secondary?: string };
+
+/**
+ * A postal address on an identity subject (camelCase). Kept loose/forward-
+ * compatible — the exact component names are not pinned by the contract note.
+ */
+export type FirIdentityAddress = {
+  addressLine?: string[];
+  postCode?: string;
+  townName?: string;
+  country?: string;
+  [k: string]: unknown;
+};
+
+/** IVMS101-aligned natural-person identity core (camelCase). */
+export type FirNaturalPerson = {
+  name?: FirNaturalPersonName;
+  dateOfBirth?: string;
+  placeOfBirth?: string;
+  nationality?: string;
+  residenceAddress?: FirIdentityAddress;
+  nationalIdentifier?: FirIdentitySchemeValue;
+  customerId?: string;
+};
+
+/** IVMS101-aligned legal-person identity core (camelCase). */
+export type FirLegalPerson = {
+  name?: string;
+  legalEntityIdentifier?: string;
+  nationalRegistration?: FirIdentitySchemeValue;
+  registrationCountry?: string;
+  incorporationDate?: string;
+  registrationAddress?: FirIdentityAddress;
+};
+
+/** The identity subject — a natural person OR a legal person (camelCase). */
+export type FirIdentitySubject = {
+  naturalPerson?: FirNaturalPerson;
+  legalPerson?: FirLegalPerson;
+};
+
+/** IdentityRequest payload — ask for the identity behind a fraud counterparty. */
+export type FirIdentityRequest = {
+  transactionRef: string;
+  aboutParty: FirAboutParty;
+  legalBasis: FirLegalBasis;
+  paymentReference?: string;
+  requestedAttributes?: string[];
+  freeText?: string;
+};
+
+/** IdentityResponse payload — return (or decline) the counterparty's identity. */
+export type FirIdentityResponse = {
+  transactionRef: string;
+  recordStatus: FirIdentityRecordStatus;
+  aboutParty?: FirAboutParty;
+  subject?: FirIdentitySubject;
+  freeText?: string;
+};
+
+/** POST /v1/fir/cases/{firId}/identity-request body. */
+export type FirIdentityRequestRequest = {
+  sender: FirInstitution;
+  recipient: FirInstitution;
+  identityRequest: FirIdentityRequest;
+};
+
+/**
+ * POST /v1/fir/cases/{firId}/identity-response body. The subject is supplied
+ * EITHER inline under identityResponse.subject OR as a pre-sealed content-blind
+ * payloadId (REQUIRED when the responder gates identity disclosure) — not both.
+ */
+export type FirIdentityResponseRequest = {
+  sender: FirInstitution;
+  recipient: FirInstitution;
+  identityResponse: FirIdentityResponse;
+  payloadId?: string;
+  note?: string;
+};
+
 // ── KYC / CDD — Customer Due Diligence response ──────────────────────────────
 //
 // IMPORTANT — wire naming. UNLIKE the rest of this CLI (and unlike FIR, which is

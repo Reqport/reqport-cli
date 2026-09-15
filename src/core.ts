@@ -6,6 +6,8 @@
 import { readFile } from "node:fs/promises";
 import { ReqportApiError, ReqportClient } from "./client.js";
 import {
+  FIR_ABOUT_PARTIES,
+  FIR_IDENTITY_RECORD_STATUSES,
   FIR_OUTCOMES,
   FIR_RECEIVER_ACCOUNT_TYPES,
   KYC_PEP_STATUSES,
@@ -23,6 +25,9 @@ import {
   type FirCaseView,
   type FirConfirmRefundRequest,
   type FirCreateNoticeRequest,
+  type FirIdentityRequestRequest,
+  type FirIdentityResponseRequest,
+  type FirLegalBasis,
   type FirOpenCaseResult,
   type FirOutcome,
   type FirRefundInstructionRequest,
@@ -564,6 +569,91 @@ export async function performFirConfirmRefund(
 /** Read a FIR case (content-blind metadata). */
 export async function readFirCase(client: ReqportClient, firId: string): Promise<FirCaseView> {
   return client.getFirCase(firId);
+}
+
+// ── FIR identity-exchange (identity-request / identity-response) ───────────────
+
+/**
+ * Validate a FIR legal basis client-side: it must be present and carry AT LEAST
+ * ONE field (token, scheme, reference, or description) — mirroring the vanta gate.
+ */
+export function validateFirLegalBasis(lb: FirLegalBasis | undefined): void {
+  if (!lb || typeof lb !== "object") {
+    throw new Error(
+      "legalBasis is required (at least one of: token, scheme, reference, description)."
+    );
+  }
+  if (!lb.token && !lb.scheme && !lb.reference && !lb.description) {
+    throw new Error(
+      "legalBasis must carry at least one field: --legal-basis <text>, or --legal-basis-token / --legal-basis-scheme / --legal-basis-reference."
+    );
+  }
+}
+
+/**
+ * Submit a FIR identity-request. Validates client-side (sender, recipient, the
+ * IdentityRequest's transactionRef + aboutParty enum, and legal-basis presence)
+ * BEFORE the POST. Shared by CLI + MCP.
+ */
+export async function performFirIdentityRequest(
+  client: ReqportClient,
+  firId: string,
+  body: FirIdentityRequestRequest
+): Promise<Record<string, unknown>> {
+  if (!body.sender) throw new Error("sender is required.");
+  if (!body.recipient) throw new Error("recipient is required.");
+  const ir = body.identityRequest;
+  if (!ir || typeof ir !== "object") throw new Error("identityRequest is required.");
+  if (!ir.transactionRef) throw new Error("identityRequest.transactionRef is required.");
+  if (!ir.aboutParty) {
+    throw new Error("identityRequest.aboutParty is required (ORDER_CUSTOMER | ORIGINATOR).");
+  }
+  if (!(FIR_ABOUT_PARTIES as readonly string[]).includes(ir.aboutParty)) {
+    throw new Error(
+      `aboutParty "${String(ir.aboutParty)}" is invalid — must be one of ${FIR_ABOUT_PARTIES.join(", ")}.`
+    );
+  }
+  validateFirLegalBasis(ir.legalBasis);
+  return client.submitFirIdentityRequest(firId, body);
+}
+
+/**
+ * Submit a FIR identity-response. Validates client-side (sender, recipient, the
+ * IdentityResponse's transactionRef + recordStatus enum) BEFORE the POST, and
+ * guards against supplying BOTH an inline subject AND a pre-sealed payloadId.
+ * Shared by CLI + MCP.
+ */
+export async function performFirIdentityRespond(
+  client: ReqportClient,
+  firId: string,
+  body: FirIdentityResponseRequest
+): Promise<ResponseResult> {
+  if (!body.sender) throw new Error("sender is required.");
+  if (!body.recipient) throw new Error("recipient is required.");
+  const ir = body.identityResponse;
+  if (!ir || typeof ir !== "object") throw new Error("identityResponse is required.");
+  if (!ir.transactionRef) {
+    throw new Error("identityResponse.transactionRef is required (--transaction-ref, or a --file/--body).");
+  }
+  if (!ir.recordStatus) {
+    throw new Error("record_status is required (FOUND | NOT_FOUND).");
+  }
+  if (!(FIR_IDENTITY_RECORD_STATUSES as readonly string[]).includes(ir.recordStatus)) {
+    throw new Error(
+      `record_status "${String(ir.recordStatus)}" is invalid — must be one of ${FIR_IDENTITY_RECORD_STATUSES.join(", ")}.`
+    );
+  }
+  if (ir.aboutParty && !(FIR_ABOUT_PARTIES as readonly string[]).includes(ir.aboutParty)) {
+    throw new Error(
+      `aboutParty "${String(ir.aboutParty)}" is invalid — must be one of ${FIR_ABOUT_PARTIES.join(", ")}.`
+    );
+  }
+  if (ir.subject && body.payloadId) {
+    throw new Error(
+      "Provide EITHER an inline subject OR a pre-sealed --payload-id, not both."
+    );
+  }
+  return client.submitFirIdentityResponse(firId, body);
 }
 
 // ── KYC / CDD — Customer Due Diligence response ───────────────────────────────

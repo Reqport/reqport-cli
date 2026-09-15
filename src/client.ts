@@ -33,6 +33,8 @@ import type {
   FirCaseView,
   FirConfirmRefundRequest,
   FirCreateNoticeRequest,
+  FirIdentityRequestRequest,
+  FirIdentityResponseRequest,
   FirOpenCaseResult,
   FirRefundInstructionRequest,
   FirSubmitResponseRequest,
@@ -548,6 +550,41 @@ export class ReqportClient {
     return this.request<FirCaseView>(`/v1/fir/cases/${encodeURIComponent(firId)}`, {
       method: "GET",
     });
+  }
+
+  /**
+   * POST /v1/fir/cases/{firId}/identity-request — a party requests the identity
+   * behind a fraud-transaction counterparty (ORDER_CUSTOMER | ORIGINATOR). Body
+   * carries both institutions + an IdentityRequest (transactionRef, aboutParty,
+   * legalBasis). Returns the assembled IDENTITY_REQUEST wire envelope. Needs
+   * scope workflows:write.
+   */
+  submitFirIdentityRequest(
+    firId: string,
+    body: FirIdentityRequestRequest
+  ): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>(
+      `/v1/fir/cases/${encodeURIComponent(firId)}/identity-request`,
+      { method: "POST", idempotent: true, body: JSON.stringify(body) }
+    );
+  }
+
+  /**
+   * POST /v1/fir/cases/{firId}/identity-response — the counterparty returns the
+   * KYC/IVMS101 identity core (recordStatus FOUND | NOT_FOUND). The subject is
+   * supplied inline under identityResponse.subject OR as a pre-sealed payloadId
+   * (REQUIRED when the responder gates disclosure) so the per-type human-approval
+   * hold (#253) can gate it (202 PENDING_APPROVAL) without holding cleartext PII.
+   * Delegates to the response path server-side (responses:write).
+   */
+  submitFirIdentityResponse(
+    firId: string,
+    body: FirIdentityResponseRequest
+  ): Promise<ResponseResult> {
+    return this.request<ResponseResult>(
+      `/v1/fir/cases/${encodeURIComponent(firId)}/identity-response`,
+      { method: "POST", idempotent: true, body: JSON.stringify(body) }
+    );
   }
 
   // ── KYC / CDD — Customer Due Diligence response ─────────────────────────────

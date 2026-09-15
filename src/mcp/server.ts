@@ -25,6 +25,8 @@ import {
   parseAccountArg,
   parseTarget,
   performFirConfirmRefund,
+  performFirIdentityRequest,
+  performFirIdentityRespond,
   performFirInstructRefund,
   performFirNotify,
   performFirRespond,
@@ -36,6 +38,8 @@ import {
 } from "../core.js";
 import { explainError } from "../ui.js";
 import {
+  FIR_ABOUT_PARTIES,
+  FIR_IDENTITY_RECORD_STATUSES,
   FIR_OUTCOMES,
   FIR_RECEIVER_ACCOUNT_TYPES,
   KYC_PEP_STATUSES,
@@ -47,6 +51,8 @@ import {
   type AccountInstrument,
   type CddRecord,
   type FirCreateNoticeRequest,
+  type FirIdentityRequest,
+  type FirIdentityResponse,
   type FirRefundInstruction,
   type FirRefundInstructionRequest,
   type FirResponseOutcome,
@@ -54,7 +60,7 @@ import {
   type RelationshipType,
 } from "../types.js";
 
-const VERSION = "0.5.0";
+const VERSION = "0.6.0";
 
 const envSchema = z
   .enum(["sandbox", "uat", "prod"])
@@ -719,6 +725,85 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
     })
     .describe("REFUND_INSTRUCTION payload: authorise a refund of a held transaction.");
 
+  // Identity-exchange schemas (the identity subject is the KYC/IVMS101 core, but
+  // camelCase here — matching the FIR wire idiom).
+
+  const firIdentitySchemeValueSchema = z
+    .object({ scheme: z.string().optional(), value: z.string().optional() })
+    .describe("A scheme-qualified identifier {scheme, value}.");
+
+  const firIdentityAddressSchema = z
+    .object({
+      addressLine: z.array(z.string()).optional(),
+      postCode: z.string().optional(),
+      townName: z.string().optional(),
+      country: z.string().optional().describe("ISO 3166-1 alpha-2."),
+    })
+    .describe("A postal address (camelCase).");
+
+  const firNaturalPersonSchema = z
+    .object({
+      name: z
+        .object({ primary: z.string().optional(), secondary: z.string().optional() })
+        .optional()
+        .describe("IVMS101 name: primary (family) + optional secondary (given)."),
+      dateOfBirth: z.string().optional().describe("date"),
+      placeOfBirth: z.string().optional(),
+      nationality: z.string().optional().describe("ISO 3166-1 alpha-2"),
+      residenceAddress: firIdentityAddressSchema.optional(),
+      nationalIdentifier: firIdentitySchemeValueSchema.optional(),
+      customerId: z.string().optional(),
+    })
+    .describe("IVMS101-aligned natural-person identity core (camelCase).");
+
+  const firLegalPersonSchema = z
+    .object({
+      name: z.string().optional(),
+      legalEntityIdentifier: z.string().optional().describe("ISO 17442 LEI"),
+      nationalRegistration: firIdentitySchemeValueSchema.optional(),
+      registrationCountry: z.string().optional().describe("ISO 3166-1 alpha-2"),
+      incorporationDate: z.string().optional().describe("date"),
+      registrationAddress: firIdentityAddressSchema.optional(),
+    })
+    .describe("IVMS101-aligned legal-person identity core (camelCase).");
+
+  const firIdentitySubjectSchema = z
+    .object({
+      naturalPerson: firNaturalPersonSchema.optional(),
+      legalPerson: firLegalPersonSchema.optional(),
+    })
+    .describe("The identity subject — exactly one of naturalPerson OR legalPerson.");
+
+  const firLegalBasisSchema = z
+    .object({
+      token: z.string().optional(),
+      scheme: z.string().optional(),
+      reference: z.string().optional(),
+      description: z.string().optional(),
+    })
+    .describe("Legal basis for the identity request — at least one field required.");
+
+  const firIdentityRequestSchema = z
+    .object({
+      transactionRef: z.string().describe("The fraud transaction the identity is about."),
+      aboutParty: z.enum(FIR_ABOUT_PARTIES).describe("Whose identity: ORDER_CUSTOMER | ORIGINATOR."),
+      legalBasis: firLegalBasisSchema,
+      paymentReference: z.string().optional(),
+      requestedAttributes: z.array(z.string()).optional(),
+      freeText: z.string().optional(),
+    })
+    .describe("IdentityRequest payload: ask for the identity behind a fraud counterparty.");
+
+  const firIdentityResponseSchema = z
+    .object({
+      transactionRef: z.string(),
+      recordStatus: z.enum(FIR_IDENTITY_RECORD_STATUSES).describe("FOUND | NOT_FOUND."),
+      aboutParty: z.enum(FIR_ABOUT_PARTIES).optional(),
+      subject: firIdentitySubjectSchema.optional(),
+      freeText: z.string().optional(),
+    })
+    .describe("IdentityResponse payload: return (or decline) the counterparty's identity.");
+
   server.registerTool(
     "reqport_fir_list",
     {
@@ -863,6 +948,71 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
           await performFirConfirmRefund(clientFor(env ?? defaultEnv), firId, {
             sender,
             recipient,
+            payloadId,
+            note,
+          })
+        );
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "reqport_fir_identity_request",
+    {
+      title: "Request a FIR counterparty's identity",
+      description:
+        "Request the identity behind a fraud-transaction counterparty (either side) via POST /v1/fir/cases/{firId}/identity-request. aboutParty is ORDER_CUSTOMER | ORIGINATOR. legalBasis MUST carry at least one field (token, scheme, reference, or description) — the server gate is mirrored client-side. Sealed dual-copy to both parties. Needs scope workflows:write.",
+      inputSchema: {
+        env: envSchema,
+        firId: z.string(),
+        sender: firInstitutionSchema,
+        recipient: firInstitutionSchema,
+        identityRequest: firIdentityRequestSchema,
+      },
+    },
+    async ({ env, firId, sender, recipient, identityRequest }) => {
+      try {
+        return ok(
+          await performFirIdentityRequest(clientFor(env ?? defaultEnv), firId, {
+            sender,
+            recipient,
+            identityRequest: identityRequest as FirIdentityRequest,
+          })
+        );
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "reqport_fir_identity_respond",
+    {
+      title: "Return a FIR counterparty's identity",
+      description:
+        "Return the identity behind a fraud-transaction counterparty (receiver side) via POST /v1/fir/cases/{firId}/identity-response. recordStatus is FOUND | NOT_FOUND. Supply the identity subject EITHER inline under identityResponse.subject (camelCase naturalPerson|legalPerson; server-sealed per-party) OR as a pre-sealed content-blind payloadId — not both. The pre-sealed form is REQUIRED when your org's approval policy gates identity disclosure (no cleartext PII may be held); it can then hold the answer (202 PENDING_APPROVAL). Needs scope responses:write.",
+      inputSchema: {
+        env: envSchema,
+        firId: z.string(),
+        sender: firInstitutionSchema,
+        recipient: firInstitutionSchema,
+        identityResponse: firIdentityResponseSchema,
+        payloadId: z
+          .string()
+          .optional()
+          .describe("A pre-sealed identity document payloadId (required when your org gates identity disclosure)."),
+        note: z.string().optional(),
+      },
+    },
+    async ({ env, firId, sender, recipient, identityResponse, payloadId, note }) => {
+      try {
+        return ok(
+          await performFirIdentityRespond(clientFor(env ?? defaultEnv), firId, {
+            sender,
+            recipient,
+            identityResponse: identityResponse as FirIdentityResponse,
             payloadId,
             note,
           })
