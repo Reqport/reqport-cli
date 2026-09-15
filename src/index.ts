@@ -11,7 +11,7 @@ import { Command } from "commander";
 import { resolveEnv } from "./env.js";
 import { explainError, err } from "./ui.js";
 
-const VERSION = "0.4.0";
+const VERSION = "0.5.0";
 
 async function main(): Promise<void> {
   const program = new Command();
@@ -505,6 +505,59 @@ async function main(): Promise<void> {
           note: opts.note,
           yes: opts.yes,
           json: globalJson(),
+        });
+      })()
+    );
+
+  // ── kyc (KYC / CDD — Customer Due Diligence response) ───────────────────────
+  const kyc = program
+    .command("kyc")
+    .description(
+      "KYC / CDD: answer a Customer Due Diligence request (responder side; bodies are snake_case)"
+    );
+
+  kyc
+    .command("list")
+    .description("Discover KYC/CDD checks addressed to you (via /v1/affordances; no list endpoint)")
+    .option("-s, --state <state>", "affordance state", "open")
+    .option("--mine", "list your org's own KYC edges (/mine) instead of addressed-to-me", false)
+    .action((opts) =>
+      wrap(async () => {
+        const { runKycList } = await import("./commands/kyc.js");
+        return runKycList(globalEnv(), { state: opts.state, mine: opts.mine, json: globalJson() });
+      })()
+    );
+
+  kyc
+    .command("show <requestId>")
+    .description("Content-blind read-back of a KYC/CDD response — GET /v1/requests/{id}/kyc-response")
+    .action((requestId) =>
+      wrap(async () => {
+        const { runKycShow } = await import("./commands/kyc.js");
+        return runKycShow(globalEnv(), requestId, { json: globalJson() });
+      })()
+    );
+
+  kyc
+    .command("respond <requestId>")
+    .description("Answer a KYC/CDD request with the CDD record — POST /v1/requests/{id}/kyc-response")
+    .requiredOption("--record-status <status>", "FOUND | NOT_FOUND (mandatory)")
+    .option("--file <path>", "the CDD record as snake_case JSON in a file (the record body)")
+    .option("--body <inline>", "the same CDD record as inline snake_case JSON (mutually exclusive with --file)")
+    .option("--payload-id <uuid>", "a pre-sealed content-blind KYC_CDD_JSON document (required when your org gates KYC)")
+    .option("--note <text>", "optional free-text note (auth.002 AddtlInf)")
+    .option("-y, --yes", "skip the confirmation prompt", false)
+    .action((requestId, opts) =>
+      wrap(async () => {
+        const { runKycRespond } = await import("./commands/kyc.js");
+        return runKycRespond(globalEnv(), requestId, {
+          recordStatus: opts.recordStatus,
+          file: opts.file,
+          body: opts.body,
+          payloadId: opts.payloadId,
+          note: opts.note,
+          yes: opts.yes,
+          jsonOut: globalJson(),
         });
       })()
     );

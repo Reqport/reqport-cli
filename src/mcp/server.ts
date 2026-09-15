@@ -20,6 +20,7 @@ import { readApiKey, resolveEnv, type ReqportEnv } from "../env.js";
 import {
   decodePayloads,
   firAffordanceGroups,
+  kycAffordanceGroups,
   mimeTypeForFilename,
   parseAccountArg,
   parseTarget,
@@ -27,24 +28,33 @@ import {
   performFirInstructRefund,
   performFirNotify,
   performFirRespond,
+  performKycRespond,
   performRespond,
   readFirCase,
+  readKycResponse,
   readRequest,
 } from "../core.js";
 import { explainError } from "../ui.js";
 import {
   FIR_OUTCOMES,
   FIR_RECEIVER_ACCOUNT_TYPES,
+  KYC_PEP_STATUSES,
+  KYC_RECORD_STATUSES,
+  KYC_RELATIONSHIP_STATUSES,
+  KYC_RISK_RATINGS,
+  KYC_STATUSES,
   RELATIONSHIP_TYPES,
   type AccountInstrument,
+  type CddRecord,
   type FirCreateNoticeRequest,
   type FirRefundInstruction,
   type FirRefundInstructionRequest,
   type FirResponseOutcome,
+  type KycRecordStatus,
   type RelationshipType,
 } from "../types.js";
 
-const VERSION = "0.4.0";
+const VERSION = "0.5.0";
 
 const envSchema = z
   .enum(["sandbox", "uat", "prod"])
@@ -853,6 +863,184 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
           await performFirConfirmRefund(clientFor(env ?? defaultEnv), firId, {
             sender,
             recipient,
+            payloadId,
+            note,
+          })
+        );
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  // ── KYC / CDD — Customer Due Diligence response ──────────────────────────────
+  //
+  // Structured tools mirroring the CLI `qp kyc …` commands. CRITICAL: unlike FIR
+  // (camelCase) and the rest of the API, the KYC bodies are **snake_case** — the
+  // record fields below are all snake_case to match the wire.
+
+  const kycSchemeValueSchema = z
+    .object({ scheme: z.string().optional(), value: z.string().optional() })
+    .describe("A scheme-qualified identifier {scheme, value}.");
+
+  const kycAddressSchema = z
+    .object({
+      address_line: z.array(z.string()).optional(),
+      post_code: z.string().optional(),
+      town_name: z.string().optional(),
+      country: z.string().optional().describe("ISO 3166-1 alpha-2."),
+    })
+    .describe("A postal address (snake_case).");
+
+  const kycNaturalPersonSchema = z
+    .object({
+      name: z
+        .object({ primary: z.string().optional(), secondary: z.string().optional() })
+        .optional()
+        .describe("IVMS101 name: primary (family) + optional secondary (given)."),
+      date_of_birth: z.string().optional().describe("date"),
+      place_of_birth: z.string().optional(),
+      nationality: z.string().optional().describe("ISO 3166-1 alpha-2"),
+      residence_address: kycAddressSchema.optional(),
+      national_identifier: kycSchemeValueSchema.optional(),
+      customer_id: z.string().optional(),
+    })
+    .describe("IVMS101-aligned natural-person identity core (snake_case).");
+
+  const kycLegalPersonSchema = z
+    .object({
+      name: z.string().optional(),
+      legal_entity_identifier: z.string().optional().describe("ISO 17442 LEI"),
+      national_registration: kycSchemeValueSchema.optional(),
+      registration_country: z.string().optional().describe("ISO 3166-1 alpha-2"),
+      incorporation_date: z.string().optional().describe("date"),
+      registration_address: kycAddressSchema.optional(),
+    })
+    .describe("IVMS101-aligned legal-person identity core (snake_case).");
+
+  const kycRecordSchema = z
+    .object({
+      subject: z
+        .object({
+          natural_person: kycNaturalPersonSchema.optional(),
+          legal_person: kycLegalPersonSchema.optional(),
+        })
+        .optional()
+        .describe("The customer identity — exactly one of natural_person OR legal_person."),
+      verification: z
+        .object({
+          method: z.string().optional().describe("DOCUMENT | EID | VIDEO | BANK_ID | OTHER"),
+          level: z.string().optional().describe("SIMPLIFIED | STANDARD | ENHANCED"),
+          verified_at: z.string().optional(),
+          provider: z.string().optional(),
+        })
+        .optional(),
+      kyc_status: z.enum(KYC_STATUSES).optional().describe("VERIFIED | PENDING | REJECTED | EXPIRED"),
+      risk_rating: z.enum(KYC_RISK_RATINGS).optional().describe("LOW | MEDIUM | HIGH"),
+      risk_factors: z.array(z.string()).optional(),
+      pep_status: z.enum(KYC_PEP_STATUSES).optional().describe("NONE | PEP | RCA"),
+      pep_position: z.string().optional(),
+      screening: z
+        .object({
+          sanctions_hit: z.boolean().optional(),
+          adverse_media: z.boolean().optional(),
+          screened_at: z.string().optional(),
+          provider: z.string().optional(),
+        })
+        .optional(),
+      beneficial_owners: z
+        .array(
+          z.object({
+            person: kycNaturalPersonSchema.optional(),
+            ownership_percent: z.number().optional().describe("0..100"),
+            control_type: z.string().optional(),
+          })
+        )
+        .optional(),
+      source_of_funds: z
+        .object({ code: z.string().optional(), description: z.string().optional() })
+        .optional(),
+      source_of_wealth: z
+        .object({ code: z.string().optional(), description: z.string().optional() })
+        .optional(),
+      relationship: z
+        .object({
+          type: z.string().optional(),
+          status: z.enum(KYC_RELATIONSHIP_STATUSES).optional().describe("ACTIVE | CLOSED | DORMANT"),
+          onboarded_at: z.string().optional(),
+          last_reviewed_at: z.string().optional(),
+          next_review_due: z.string().optional(),
+          products: z.array(z.string()).optional(),
+        })
+        .optional(),
+      queried_at: z.string().optional().describe("date-time"),
+    })
+    .describe("The CDD record (snake_case): identity core + assessment. All fields optional.");
+
+  server.registerTool(
+    "reqport_kyc_list",
+    {
+      title: "List KYC/CDD checks",
+      description:
+        "Discover KYC / CDD (Customer Due Diligence) checks addressed to your org. KYC checks are KYC_CDD_CHECK_V1 workflow instances that surface through the SAME GET /v1/affordances discovery as reqport_list_requests — there is no list endpoint. Returns the KYC-check affordance groups only.",
+      inputSchema: {
+        env: envSchema,
+        state: z.string().optional().describe("Affordance state (default open)."),
+        mine: z.boolean().optional().describe("List owned KYC edges (/mine) instead of addressed-to-me."),
+      },
+    },
+    async ({ env, state, mine }) => {
+      try {
+        const res = await clientFor(env ?? defaultEnv).listAffordances({ state: state ?? "open", mine });
+        const groups = kycAffordanceGroups(res);
+        return ok({ total: groups.reduce((n, g) => n + (g.items?.length ?? 0), 0), groups });
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "reqport_kyc_show",
+    {
+      title: "Read back a KYC/CDD response",
+      description:
+        "Content-blind read-back of a KYC/CDD response via GET /v1/requests/{requestId}/kyc-response: record_status (FOUND | NOT_FOUND, or null when not yet answered), workflow_status, the party org ids, and responded_at (all snake_case). The sealed CDD record itself is NOT decrypted here. Needs scope responses:read.",
+      inputSchema: { env: envSchema, requestId: z.string().describe("The KYC/CDD request id.") },
+    },
+    async ({ env, requestId }) => {
+      try {
+        return ok(await readKycResponse(clientFor(env ?? defaultEnv), requestId));
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "reqport_kyc_respond",
+    {
+      title: "Answer a KYC/CDD request",
+      description:
+        "Answer a KYC / CDD request via POST /v1/requests/{requestId}/kyc-response. MANDATORY record_status: FOUND (→ auth.002 COMP) | NOT_FOUND (→ NFOU). Supply the CDD record EITHER inline as `record` (snake_case; server-sealed per-party) OR as a pre-sealed content-blind `payloadId` (a KYC_CDD_JSON document) — not both. A CDD record carries PII; if your org's approval policy gates KYC, an inline record is rejected and you must use the pre-sealed payloadId form. The request BODY is snake_case. Needs scope responses:write.",
+      inputSchema: {
+        env: envSchema,
+        requestId: z.string(),
+        recordStatus: z.enum(KYC_RECORD_STATUSES).describe("MANDATORY: FOUND | NOT_FOUND."),
+        record: kycRecordSchema.optional(),
+        payloadId: z
+          .string()
+          .optional()
+          .describe("A pre-sealed content-blind KYC_CDD_JSON document (required when your org gates KYC)."),
+        note: z.string().optional().describe("Optional free-text note (auth.002 AddtlInf)."),
+      },
+    },
+    async ({ env, requestId, recordStatus, record, payloadId, note }) => {
+      try {
+        return ok(
+          await performKycRespond(clientFor(env ?? defaultEnv), requestId, {
+            recordStatus: recordStatus as KycRecordStatus,
+            record: record as CddRecord | undefined,
             payloadId,
             note,
           })

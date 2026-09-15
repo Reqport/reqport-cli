@@ -8,10 +8,16 @@ import { ReqportApiError, ReqportClient } from "./client.js";
 import {
   FIR_OUTCOMES,
   FIR_RECEIVER_ACCOUNT_TYPES,
+  KYC_PEP_STATUSES,
+  KYC_RECORD_STATUSES,
+  KYC_RELATIONSHIP_STATUSES,
+  KYC_RISK_RATINGS,
+  KYC_STATUSES,
   RELATIONSHIP_TYPES,
   type AccountInstrument,
   type AffordanceGroup,
   type AffordanceListResponse,
+  type CddRecord,
   type ChatTarget,
   type DecodedPayload,
   type FirCaseView,
@@ -22,6 +28,9 @@ import {
   type FirRefundInstructionRequest,
   type FirResponseOutcome,
   type FirSubmitResponseRequest,
+  type KycRecordStatus,
+  type KycResponseSubmission,
+  type KycResponseView,
   type PayloadMetaResponse,
   type RelationshipType,
   type ResponseResult,
@@ -555,4 +564,105 @@ export async function performFirConfirmRefund(
 /** Read a FIR case (content-blind metadata). */
 export async function readFirCase(client: ReqportClient, firId: string): Promise<FirCaseView> {
   return client.getFirCase(firId);
+}
+
+// ── KYC / CDD — Customer Due Diligence response ───────────────────────────────
+//
+// A single request→response family (NOT a multi-message case). KYC checks are
+// KYC_CDD_CHECK_V1 workflow instances; there is no list endpoint, so a responder
+// discovers them through the same /v1/affordances discovery the responder loop
+// uses. The submit + read-back bodies are snake_case (unlike FIR / the rest).
+
+/** The workflow type of a KYC/CDD check (one request→response family). */
+export const KYC_WORKFLOW_TYPE = "KYC_CDD_CHECK_V1";
+
+/**
+ * Does this workflow/edge type belong to a KYC/CDD check? Used to filter the
+ * shared /v1/affordances discovery down to KYC checks (there is no list
+ * endpoint). Kept broad so it matches whether the affordance projection labels
+ * the edge as the workflow type (KYC_CDD_CHECK_V1) or a KYC/CDD kernel edge.
+ */
+export function isKycWorkflowType(t: string | undefined): boolean {
+  if (!t) return false;
+  const u = t.toUpperCase();
+  return u.includes("KYC") || u.includes("CDD");
+}
+
+/** The KYC-check affordance groups from a /v1/affordances response. */
+export function kycAffordanceGroups(res: AffordanceListResponse): AffordanceGroup[] {
+  return (res.groups ?? []).filter((g) => isKycWorkflowType(g.edgeType));
+}
+
+function assertEnum(value: unknown, allowed: readonly string[], label: string): void {
+  if (value === undefined || value === null) return;
+  if (typeof value !== "string" || !allowed.includes(value)) {
+    throw new Error(`${label} "${String(value)}" is invalid — must be one of ${allowed.join(", ")}.`);
+  }
+}
+
+/**
+ * Spot-validate the enum-typed fields of a CDD record client-side before the POST
+ * (the server is authoritative; this fails fast on obvious mistakes). Only the
+ * fields that carry a fixed vocabulary are checked: kyc_status, risk_rating,
+ * pep_status, and relationship.status. All are optional.
+ */
+export function validateKycRecord(record: CddRecord): void {
+  if (typeof record !== "object" || record === null || Array.isArray(record)) {
+    throw new Error("the CDD record must be a JSON object.");
+  }
+  assertEnum(record.kyc_status, KYC_STATUSES, "kyc_status");
+  assertEnum(record.risk_rating, KYC_RISK_RATINGS, "risk_rating");
+  assertEnum(record.pep_status, KYC_PEP_STATUSES, "pep_status");
+  if (record.relationship) {
+    assertEnum(record.relationship.status, KYC_RELATIONSHIP_STATUSES, "relationship.status");
+  }
+}
+
+export type KycRespondInput = {
+  recordStatus: KycRecordStatus;
+  /** Optional inline CDD record (snake_case); server-sealed per-party. */
+  record?: CddRecord;
+  /** Optional pre-sealed content-blind KYC_CDD_JSON document (required when gated). */
+  payloadId?: string;
+  note?: string;
+};
+
+/**
+ * Submit a KYC/CDD response. Validates record_status (required + enum) and, when
+ * an inline record is given, spot-validates its enums; guards against supplying
+ * BOTH an inline record and a payload_id (the server uses the payload_id and
+ * ignores the record). Shared by the CLI `qp kyc respond` command and the MCP tool.
+ */
+export async function performKycRespond(
+  client: ReqportClient,
+  requestId: string,
+  input: KycRespondInput
+): Promise<ResponseResult> {
+  if (!input.recordStatus) {
+    throw new Error("record_status is required (FOUND | NOT_FOUND).");
+  }
+  if (!(KYC_RECORD_STATUSES as readonly string[]).includes(input.recordStatus)) {
+    throw new Error(`record_status "${input.recordStatus}" is invalid — must be one of ${KYC_RECORD_STATUSES.join(", ")}.`);
+  }
+  if (input.record && input.payloadId) {
+    throw new Error(
+      "Provide EITHER an inline record OR a pre-sealed payload_id, not both."
+    );
+  }
+  if (input.record) validateKycRecord(input.record);
+
+  const body: KycResponseSubmission = { record_status: input.recordStatus };
+  if (input.record) body.record = input.record;
+  if (input.payloadId) body.payload_id = input.payloadId;
+  if (input.note) body.note = input.note;
+
+  return client.submitKycResponse(requestId, body);
+}
+
+/** Read a KYC/CDD response (content-blind read-back). */
+export async function readKycResponse(
+  client: ReqportClient,
+  requestId: string
+): Promise<KycResponseView> {
+  return client.getKycResponse(requestId);
 }
