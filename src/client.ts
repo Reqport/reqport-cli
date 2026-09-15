@@ -36,6 +36,8 @@ import type {
   FirOpenCaseResult,
   FirRefundInstructionRequest,
   FirSubmitResponseRequest,
+  KycResponseSubmission,
+  KycResponseView,
   PayloadMetaResponse,
   PendingActionResult,
   PendingListResponse,
@@ -546,6 +548,46 @@ export class ReqportClient {
     return this.request<FirCaseView>(`/v1/fir/cases/${encodeURIComponent(firId)}`, {
       method: "GET",
     });
+  }
+
+  // ── KYC / CDD — Customer Due Diligence response ─────────────────────────────
+  //
+  // A single request→response family (like the business-relationship check), NOT
+  // a multi-message case. The responder returns the CDD record it holds on the
+  // subject. UNLIKE every other endpoint this client calls, the KYC bodies are
+  // **snake_case** on the wire (the Vanta DTO records are named in snake_case):
+  // record_status, payload_id, and every nested CddRecord field. Scopes:
+  // responses:write (submit), responses:read (read-back).
+
+  /**
+   * POST /v1/requests/{requestId}/kyc-response — answer a KYC/CDD request. The
+   * body is snake_case: the mandatory record_status plus the optional record
+   * (inline; server-sealed per-party) or a pre-sealed payload_id, plus a note.
+   * Delegates to the proven response path server-side (per-party dual-copy seal +
+   * the #253 human-approval hold). Caller org must be the request's responder org.
+   */
+  submitKycResponse(
+    requestId: string,
+    body: KycResponseSubmission
+  ): Promise<ResponseResult> {
+    return this.request<ResponseResult>(
+      `/v1/requests/${encodeURIComponent(requestId)}/kyc-response`,
+      { method: "POST", idempotent: true, body: JSON.stringify(body) }
+    );
+  }
+
+  /**
+   * GET /v1/requests/{requestId}/kyc-response — content-blind read-back. Returns
+   * the answer's record_status (FOUND | NOT_FOUND), the workflow status, the
+   * party org ids, and when it was answered (all snake_case). The sealed
+   * CddResponse itself is NOT decrypted here. Party-only; MACHINE needs
+   * responses:read.
+   */
+  getKycResponse(requestId: string): Promise<KycResponseView> {
+    return this.request<KycResponseView>(
+      `/v1/requests/${encodeURIComponent(requestId)}/kyc-response`,
+      { method: "GET" }
+    );
   }
 }
 

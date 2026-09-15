@@ -445,6 +445,162 @@ export type FirCaseView = {
   [k: string]: unknown;
 };
 
+// ── KYC / CDD — Customer Due Diligence response ──────────────────────────────
+//
+// IMPORTANT — wire naming. UNLIKE the rest of this CLI (and unlike FIR, which is
+// camelCase), the KYC/CDD bodies are **snake_case** on the wire: the Vanta
+// KycResponseController's DTO records are NAMED in snake_case (record_status,
+// payload_id, natural_person, kyc_status, risk_rating, national_identifier,
+// beneficial_owners, source_of_funds, …) so Jackson's default mapping emits the
+// IWDX kyc/v0.1 schema keys with no @JsonProperty. Build every KYC body
+// snake_case. All record fields are optional; only record_status is mandatory.
+
+/** The mandatory record_status enum (FOUND → auth.002 COMP; NOT_FOUND → NFOU). */
+export const KYC_RECORD_STATUSES = ["FOUND", "NOT_FOUND"] as const;
+export type KycRecordStatus = (typeof KYC_RECORD_STATUSES)[number];
+
+/** kyc_status enum. */
+export const KYC_STATUSES = ["VERIFIED", "PENDING", "REJECTED", "EXPIRED"] as const;
+export type KycStatus = (typeof KYC_STATUSES)[number];
+
+/** risk_rating enum. */
+export const KYC_RISK_RATINGS = ["LOW", "MEDIUM", "HIGH"] as const;
+export type KycRiskRating = (typeof KYC_RISK_RATINGS)[number];
+
+/** pep_status enum (not a PEP / a PEP / a relative or close associate). */
+export const KYC_PEP_STATUSES = ["NONE", "PEP", "RCA"] as const;
+export type KycPepStatus = (typeof KYC_PEP_STATUSES)[number];
+
+/** relationship.status enum. */
+export const KYC_RELATIONSHIP_STATUSES = ["ACTIVE", "CLOSED", "DORMANT"] as const;
+export type KycRelationshipStatus = (typeof KYC_RELATIONSHIP_STATUSES)[number];
+
+/** A scheme-qualified identifier: the {scheme, value} pair. */
+export type KycSchemeValue = { scheme?: string; value?: string };
+
+/** A postal address; only the country code is constrained (ISO 3166-1 alpha-2). */
+export type KycAddress = {
+  address_line?: string[];
+  post_code?: string;
+  town_name?: string;
+  country?: string;
+};
+
+/** IVMS101-aligned natural-person name: primary (family) + optional secondary (given). */
+export type KycNameNatural = { primary?: string; secondary?: string };
+
+/** IVMS101-aligned natural-person identity core. */
+export type KycNaturalPerson = {
+  name?: KycNameNatural;
+  date_of_birth?: string;
+  place_of_birth?: string;
+  nationality?: string;
+  residence_address?: KycAddress;
+  national_identifier?: KycSchemeValue;
+  customer_id?: string;
+};
+
+/** IVMS101-aligned legal-person identity core. */
+export type KycLegalPerson = {
+  name?: string;
+  legal_entity_identifier?: string;
+  national_registration?: KycSchemeValue;
+  registration_country?: string;
+  incorporation_date?: string;
+  registration_address?: KycAddress;
+};
+
+/** The customer identity — exactly one of a natural person OR a legal person. */
+export type KycSubject = {
+  natural_person?: KycNaturalPerson;
+  legal_person?: KycLegalPerson;
+};
+
+/** How and to what depth the customer's identity was verified. */
+export type KycVerification = {
+  method?: string;
+  level?: string;
+  verified_at?: string;
+  provider?: string;
+};
+
+/** Sanctions / adverse-media screening outcome. */
+export type KycScreening = {
+  sanctions_hit?: boolean;
+  adverse_media?: boolean;
+  screened_at?: string;
+  provider?: string;
+};
+
+/** For a legal person: a beneficial owner / controller (itself a natural person). */
+export type KycBeneficialOwner = {
+  person?: KycNaturalPerson;
+  ownership_percent?: number;
+  control_type?: string;
+};
+
+/** A code and/or human-readable description (source_of_funds / source_of_wealth). */
+export type KycCodedDescription = { code?: string; description?: string };
+
+/** The business relationship's current shape and review cadence. */
+export type KycRelationship = {
+  type?: string;
+  status?: KycRelationshipStatus;
+  onboarded_at?: string;
+  last_reviewed_at?: string;
+  next_review_due?: string;
+  products?: string[];
+};
+
+/**
+ * The CDD record — the IWDX kyc/v0.1 CddResponse minus record_status (the
+ * submission carries that at the top level). Identity core + assessment layer.
+ * Every field is optional; the responder discloses only what is sufficient
+ * (data minimisation). ALL keys are snake_case.
+ */
+export type CddRecord = {
+  subject?: KycSubject;
+  verification?: KycVerification;
+  kyc_status?: KycStatus;
+  risk_rating?: KycRiskRating;
+  risk_factors?: string[];
+  pep_status?: KycPepStatus;
+  pep_position?: string;
+  screening?: KycScreening;
+  beneficial_owners?: KycBeneficialOwner[];
+  source_of_funds?: KycCodedDescription;
+  source_of_wealth?: KycCodedDescription;
+  relationship?: KycRelationship;
+  queried_at?: string;
+};
+
+/**
+ * POST /v1/requests/{requestId}/kyc-response body. record_status is mandatory;
+ * supply the record EITHER inline under `record` (server-sealed per-party) OR as
+ * a pre-sealed content-blind `payload_id` (a KYC_CDD_JSON document; REQUIRED when
+ * the responder's approval policy gates KYC — no cleartext PII may be held).
+ */
+export type KycResponseSubmission = {
+  record_status: KycRecordStatus;
+  record?: CddRecord;
+  payload_id?: string;
+  note?: string;
+};
+
+/**
+ * GET /v1/requests/{requestId}/kyc-response — content-blind read-back. Snake_case
+ * (mirrors the KycResponseView Java record). record_status is null until answered.
+ */
+export type KycResponseView = {
+  request_id: string;
+  record_status?: string | null;
+  workflow_status?: string | null;
+  requester_org_id?: string | null;
+  responder_org_id?: string | null;
+  responded_at?: string | null;
+  [k: string]: unknown;
+};
+
 /** A decoded request payload plus the resolved plaintext. */
 export type DecodedPayload = {
   payloadId: string;

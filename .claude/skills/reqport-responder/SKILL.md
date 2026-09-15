@@ -156,6 +156,48 @@ receiver `accountType` is constrained to `CLIENT_FUNDS | OMNIBUS | MERCHANT`. A
 `confirm-refund` may be **held** by your org's approval policy → work it with
 `qp pending …`.
 
+## KYC / CDD — Customer Due Diligence response
+
+Beyond the business-relationship check, `qp` answers **KYC / CDD** checks — a
+single **request→response** family (NOT a multi-message case). A requester (an
+authority, or a peer FI with a legal basis) asks for the **Customer Due Diligence
+record** you hold on a subject; you answer. Like `qp respond`, the CLI **answers**
+requests — it does not create them.
+
+```bash
+# Responder: discover + read-back
+qp --env sandbox kyc list                       # KYC checks are KYC_CDD_CHECK_V1 (via /v1/affordances)
+qp --env sandbox kyc show <requestId>           # content-blind read-back
+
+# NOT_FOUND — a definitive negative (auth.002 NFOU); no record needed
+qp --env sandbox kyc respond <requestId> --record-status NOT_FOUND --yes
+
+# FOUND with an inline CDD record (auth.002 COMP; sealed per-party server-side)
+qp --env sandbox kyc respond <requestId> --record-status FOUND --file ./cdd.json --yes
+
+# FOUND via a pre-sealed, content-blind KYC_CDD_JSON document
+qp --env sandbox kyc respond <requestId> --record-status FOUND --payload-id <uuid> --yes
+```
+
+**⚠ Bodies are `snake_case`** — UNLIKE the business-relationship / FIR bodies
+(camelCase). The record you pass with `--file`/`--body` must be snake_case:
+`record_status`, and nested `natural_person`, `legal_person`, `kyc_status`,
+`risk_rating`, `national_identifier`, `beneficial_owners`, `source_of_funds`, ….
+
+`--record-status` is **mandatory** (`FOUND` → auth.002 `COMP`; `NOT_FOUND` →
+`NFOU`), validated client-side. The record is the **identity core** (`subject`) +
+an **assessment layer** (`verification`, `kyc_status`, `risk_rating`,
+`pep_status`, `screening`, `beneficial_owners`, `source_of_funds`,
+`source_of_wealth`, `relationship`, `queried_at`) — every field optional (disclose
+only what is sufficient). Its enum fields (`kyc_status`, `risk_rating`,
+`pep_status`, `relationship.status`) are spot-validated client-side before the POST.
+
+A CDD record carries **PII**: if your org's approval policy gates KYC, an inline
+record is rejected — resubmit as a pre-sealed `--payload-id`; a gated submit
+returns `PENDING_APPROVAL` (work it with `qp pending …`). Discovery reuses
+`/v1/affordances` (no list endpoint). Scopes: `respond` → `responses:write`,
+`show` → `responses:read`.
+
 ## Driving it programmatically (MCP)
 
 For an agent integration, run the bundled stdio MCP server instead of shelling
@@ -170,9 +212,11 @@ Tools: `reqport_doctor`, `reqport_list_requests`, `reqport_show_request`,
 `relationshipTypes`), `reqport_respond`, the human-in-the-loop tools
 `reqport_pending_list`, `reqport_pending_approve`, `reqport_pending_reject`,
 `reqport_pending_withdraw`, `reqport_approval_policy_get`,
-`reqport_approval_policy_set`, and the FIR tools `reqport_fir_list`,
+`reqport_approval_policy_set`, the FIR tools `reqport_fir_list`,
 `reqport_fir_show`, `reqport_fir_notify`, `reqport_fir_respond`,
-`reqport_fir_instruct_refund`, `reqport_fir_confirm_refund`. Each accepts an optional `env`; the credential comes from the
+`reqport_fir_instruct_refund`, `reqport_fir_confirm_refund`, and the KYC/CDD tools
+`reqport_kyc_list`, `reqport_kyc_show`, `reqport_kyc_respond` (bodies snake_case).
+Each accepts an optional `env`; the credential comes from the
 server process environment. The MCP server is **API-key-only** — `qp login` is a
 human/CLI concern and is not exposed as a tool.
 

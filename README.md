@@ -90,6 +90,9 @@ The stored key lives at **`%APPDATA%\qp\credential.json`** (Windows) or
 | `qp fir respond <firId> --outcome …` | Answer a NOTICE with per-transaction outcomes (receiver side) |
 | `qp fir instruct-refund <firId> …` | Instruct a refund of a held transaction (bank side) |
 | `qp fir confirm-refund <firId> --payload-id <uuid>` | Confirm a refund executed (receiver side) |
+| `qp kyc list [--state open] [--mine]` | Discover **KYC / CDD** checks addressed to you |
+| `qp kyc show <requestId>` | Content-blind read-back of a KYC/CDD response |
+| `qp kyc respond <requestId> --record-status FOUND\|NOT_FOUND …` | Answer a KYC/CDD request with the CDD record |
 | `qp keys status` | Show the active credential's metadata (local only) |
 | `qp keys create\|list\|revoke` | Points you to the console — key management is not a CLI operation |
 | `qp mcp` | Run the stdio MCP server |
@@ -259,6 +262,78 @@ The mutating FIR commands (`notify`, `respond`, `instruct-refund`,
 `workflows:write`; `respond` / `confirm-refund` ride the response path
 (`responses:write`); `show` / `list` need `workflows:read` / discovery.
 
+## KYC / CDD — Customer Due Diligence response
+
+A **KYC / CDD** check is a single **request→response** family (like the
+business-relationship check), **not** a multi-message case: a requester (an
+authority, or a peer FI carrying a legal basis) asks a bank or exchange for the
+**Customer Due Diligence record** it holds on a subject, and the responder
+answers. Like `qp respond`, the CLI answers requests — it does **not** create them.
+
+| Step | Command | Endpoint |
+|------|---------|----------|
+| discover checks addressed to you | `qp kyc list` | `GET /v1/affordances` (filtered) |
+| read back one answer (content-blind) | `qp kyc show <requestId>` | `GET /v1/requests/{id}/kyc-response` |
+| submit the CDD record | `qp kyc respond <requestId>` | `POST /v1/requests/{id}/kyc-response` |
+
+**Discovery.** There is **no list endpoint.** KYC checks are `KYC_CDD_CHECK_V1`
+workflow instances that surface through the **same `/v1/affordances`** discovery
+`qp requests list` uses; `qp kyc list` filters that down to KYC checks and labels
+them.
+
+> **⚠ Bodies are `snake_case`.** UNLIKE the rest of this CLI (and unlike FIR, which
+> is camelCase), the KYC request body is **snake_case** — `record_status`,
+> `payload_id`, and every nested `CddRecord` field (`natural_person`, `kyc_status`,
+> `risk_rating`, `national_identifier`, `beneficial_owners`, `source_of_funds`, …).
+> The record you pass with `--file`/`--body` must be snake_case JSON.
+
+```bash
+# Responder: discover + read
+qp kyc list
+qp kyc show <requestId>
+
+# NOT_FOUND — a definitive negative (auth.002 NFOU); no record needed
+qp kyc respond <requestId> --record-status NOT_FOUND --yes
+
+# FOUND with an inline CDD record (auth.002 COMP; sealed per-party server-side)
+qp kyc respond <requestId> --record-status FOUND --file ./cdd.json --yes
+#   cdd.json (snake_case) = {
+#     "subject": { "natural_person": {
+#       "name": { "primary": "Andersson", "secondary": "Anna" },
+#       "date_of_birth": "1985-04-12", "nationality": "SE",
+#       "national_identifier": { "scheme": "SE_PERSONNUMMER", "value": "…" } } },
+#     "verification": { "method": "BANK_ID", "level": "ENHANCED" },
+#     "kyc_status": "VERIFIED", "risk_rating": "LOW", "pep_status": "NONE",
+#     "relationship": { "status": "ACTIVE", "onboarded_at": "2021-02-01T00:00:00Z" },
+#     "queried_at": "2026-08-28T09:00:00Z" }
+
+# FOUND via a pre-sealed, content-blind KYC_CDD_JSON document
+qp kyc respond <requestId> --record-status FOUND --payload-id <uuid> --yes
+```
+
+**`--record-status` is mandatory** and validated client-side against `FOUND |
+NOT_FOUND` (`FOUND` → auth.002 `COMP`; `NOT_FOUND` → `NFOU`). The record is the
+**identity core** (`subject`, a natural or legal person) plus an **assessment
+layer** (`verification`, `kyc_status`, `risk_rating` + `risk_factors`,
+`pep_status` + `pep_position`, `screening`, `beneficial_owners`,
+`source_of_funds`, `source_of_wealth`, `relationship`, `queried_at`) — every field
+optional; disclose only what is sufficient (data minimisation). When a record is
+given, its enum fields (`kyc_status`, `risk_rating`, `pep_status`,
+`relationship.status`) are **spot-validated client-side** before the POST.
+
+**Inline vs pre-sealed.** Supply the record **inline** with `--file <cdd.json>` /
+`--body <inline JSON>` (Vanta seals the assembled response per-party in the
+`RESPONSE_HEADER`), **or** as a pre-sealed `--payload-id` (a validated,
+content-blind `KYC_CDD_JSON` document Vanta never sees) — not both. A CDD record
+carries **PII**: if your org's [approval policy](#approval-human-in-the-loop)
+gates KYC, an **inline** record is rejected (no cleartext PII may be held) and you
+must resubmit as a pre-sealed `--payload-id`; the gated submit returns
+`PENDING_APPROVAL` (release with `qp pending approve <id>`).
+
+`qp kyc respond` prompts for confirmation on an interactive terminal; pass
+`-y`/`--yes` (or `--json`) to skip. Scopes: `respond` needs `responses:write`;
+`show` needs `responses:read`; `list` uses discovery.
+
 ## The `qp login` ↔ portal pairing contract
 
 The portal implements the server half; the CLI implements this half. For reference:
@@ -310,8 +385,9 @@ Tools: `reqport_doctor`, `reqport_list_requests`, `reqport_show_request`,
 `reqport_pending_approve`, `reqport_pending_reject`, `reqport_pending_withdraw`,
 `reqport_approval_policy_get`, `reqport_approval_policy_set`, the **FIR** tools
 `reqport_fir_list`, `reqport_fir_show`, `reqport_fir_notify`, `reqport_fir_respond`,
-`reqport_fir_instruct_refund`, `reqport_fir_confirm_refund`, and the chat +
-attachment tools.
+`reqport_fir_instruct_refund`, `reqport_fir_confirm_refund`, the **KYC / CDD** tools
+`reqport_kyc_list`, `reqport_kyc_show`, `reqport_kyc_respond` (bodies snake_case),
+and the chat + attachment tools.
 
 ## Give this to your agent
 
