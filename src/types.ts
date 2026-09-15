@@ -557,6 +557,70 @@ export type FirIdentityResponseRequest = {
   note?: string;
 };
 
+// ── FIR lifecycle (update / close) ────────────────────────────────────────────
+//
+// Two lifecycle messages on an open FIR case: post an UPDATE (correction, added
+// law-enforcement reference, extra transactions, a fraud-status change, or a
+// question/answer), and CLOSE the case with a terminal reason.
+//
+// IMPORTANT — wire naming. UNLIKE the other FIR bodies (camelCase), the
+// update/close request bodies are **snake_case** on the wire (update_type,
+// law_enforcement_reference, free_text, reason) — matching the vanta DTO — and
+// they carry NO sender/recipient: the case parties are already fixed by the
+// workflow instance. Enums are validated client-side.
+
+/** UPDATE update_type enum — the kind of lifecycle update being posted. */
+export const FIR_UPDATE_TYPES = [
+  "CORRECTION",
+  "LAW_ENFORCEMENT_REFERENCE_ADDED",
+  "ADDITIONAL_TRANSACTIONS",
+  "STATUS_CHANGE",
+  "QUESTION",
+  "ANSWER",
+] as const;
+export type FirUpdateType = (typeof FIR_UPDATE_TYPES)[number];
+
+/** The fraud status carried by a STATUS_CHANGE update (only meaningful there). */
+export const FIR_FRAUD_STATUSES = [
+  "SUSPECTED",
+  "STRONG_SUSPICION",
+  "CONFIRMED",
+  "CLEARED",
+] as const;
+export type FirFraudStatus = (typeof FIR_FRAUD_STATUSES)[number];
+
+/** CLOSE reason enum — the terminal outcome of the case. */
+export const FIR_CLOSE_REASONS = [
+  "REFUNDED",
+  "NOT_RECOVERABLE",
+  "NO_MATCH",
+  "WITHDRAWN",
+  "OTHER",
+] as const;
+export type FirCloseReason = (typeof FIR_CLOSE_REASONS)[number];
+
+/**
+ * POST /v1/fir/cases/{firId}/update body — snake_case on the wire. update_type is
+ * mandatory; law_enforcement_reference / status / transactions / free_text are
+ * optional. `status` is only meaningful with update_type=STATUS_CHANGE.
+ * `transactions` (for ADDITIONAL_TRANSACTIONS) is passed through verbatim from the
+ * caller's JSON — the contract pins only the top-level keys, so its element shape
+ * is not re-cast here.
+ */
+export type FirUpdateRequest = {
+  update_type: FirUpdateType;
+  law_enforcement_reference?: FirLawEnforcementReference;
+  status?: FirFraudStatus;
+  transactions?: unknown[];
+  free_text?: string;
+};
+
+/** POST /v1/fir/cases/{firId}/close body — snake_case on the wire. reason is mandatory. */
+export type FirCloseRequest = {
+  reason: FirCloseReason;
+  free_text?: string;
+};
+
 // ── KYC / CDD — Customer Due Diligence response ──────────────────────────────
 //
 // IMPORTANT — wire naming. UNLIKE the rest of this CLI (and unlike FIR, which is

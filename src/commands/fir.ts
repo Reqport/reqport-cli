@@ -27,30 +27,38 @@ import { requireResponderCredential } from "../auth/session.js";
 import {
   firAffordanceGroups,
   parseFirOutcomeArg,
+  performFirClose,
   performFirConfirmRefund,
   performFirIdentityRequest,
   performFirIdentityRespond,
   performFirInstructRefund,
   performFirNotify,
   performFirRespond,
+  performFirUpdate,
   readFirCase,
   readJsonInput,
 } from "../core.js";
 import { confirm, line, printJson, table } from "../ui.js";
 import type {
+  FirCloseReason,
+  FirCloseRequest,
   FirConfirmRefundRequest,
   FirCreateNoticeRequest,
+  FirFraudStatus,
   FirIdentityRequest,
   FirIdentityRequestRequest,
   FirIdentityResponse,
   FirIdentityResponseRequest,
   FirIdentitySubject,
   FirInstitution,
+  FirLawEnforcementReference,
   FirLegalBasis,
   FirRefundInstruction,
   FirRefundInstructionRequest,
   FirResponseOutcome,
   FirSubmitResponseRequest,
+  FirUpdateRequest,
+  FirUpdateType,
 } from "../types.js";
 
 async function clientFor(env: ReqportEnv): Promise<ReqportClient> {
@@ -639,6 +647,134 @@ export async function runFirIdentityRespond(
     line("  Held for human approval by your org's policy — release it with `qp pending approve <id>`.");
   }
   if (result.messageId) line(`  message id: ${result.messageId}`);
+  line("Verify:  qp fir show " + firId);
+  return 0;
+}
+
+// ── update (UPDATE) ────────────────────────────────────────────────────────────
+
+export type FirUpdateOptions = {
+  file?: string;
+  body?: string;
+  updateType?: string;
+  lawEnforcementScheme?: string;
+  lawEnforcementReference?: string;
+  status?: string;
+  transactions?: string; // inline JSON array
+  freeText?: string;
+  yes?: boolean;
+  json?: boolean;
+};
+
+export async function runFirUpdate(
+  env: ReqportEnv,
+  firId: string,
+  opts: FirUpdateOptions
+): Promise<number> {
+  const parsed = (await readJsonInput({ file: opts.file, body: opts.body }, "update")) ?? {};
+  const base = asRecord(parsed, "update body");
+
+  const updateType = (opts.updateType ??
+    (typeof base.update_type === "string" ? base.update_type : undefined)) as
+    | FirUpdateType
+    | undefined;
+  const status = (opts.status ??
+    (typeof base.status === "string" ? base.status : undefined)) as FirFraudStatus | undefined;
+  const freeText =
+    opts.freeText ?? (typeof base.free_text === "string" ? base.free_text : undefined);
+
+  // law_enforcement_reference {scheme, reference}: granular flags build/override it,
+  // else fall back to the base body's object.
+  let lawRef = base.law_enforcement_reference as FirLawEnforcementReference | undefined;
+  if (opts.lawEnforcementScheme || opts.lawEnforcementReference) {
+    lawRef = {
+      scheme: opts.lawEnforcementScheme ?? lawRef?.scheme ?? "",
+      reference: opts.lawEnforcementReference ?? lawRef?.reference ?? "",
+    };
+  }
+
+  // transactions (for ADDITIONAL_TRANSACTIONS): inline JSON array wins, else base body.
+  const transactions =
+    parseInlineJson<unknown[]>(opts.transactions, "transactions") ??
+    (Array.isArray(base.transactions) ? (base.transactions as unknown[]) : undefined);
+  if (transactions !== undefined && !Array.isArray(transactions)) {
+    throw new Error("--transactions must be a JSON array.");
+  }
+
+  const body: FirUpdateRequest = {
+    update_type: updateType as FirUpdateType,
+    ...(lawRef ? { law_enforcement_reference: lawRef } : {}),
+    ...(status ? { status } : {}),
+    ...(transactions && transactions.length > 0 ? { transactions } : {}),
+    ...(freeText ? { free_text: freeText } : {}),
+  };
+
+  if (!opts.json) {
+    line(`Posting an UPDATE to FIR case ${firId}:`);
+    line(`  update_type: ${body.update_type ?? "(missing)"}`);
+    if (body.status) line(`  status:      ${body.status}`);
+    if (lawRef) line(`  law ref:     ${lawRef.scheme || "?"}:${lawRef.reference || "?"}`);
+    if (transactions && transactions.length > 0) {
+      line(`  +transactions: ${transactions.length}`);
+    }
+    if (freeText) line(`  free_text:   “${freeText}”`);
+    line("");
+  }
+  if (!(await confirmAction(opts, "Send this UPDATE?"))) return 1;
+
+  const result = await performFirUpdate(await clientFor(env), firId, body);
+  if (opts.json) {
+    printJson(result);
+    return 0;
+  }
+  line(`UPDATE posted on FIR case ${firId} (${body.update_type}).`);
+  line("Verify:  qp fir show " + firId);
+  return 0;
+}
+
+// ── close (CLOSE) ──────────────────────────────────────────────────────────────
+
+export type FirCloseOptions = {
+  file?: string;
+  body?: string;
+  reason?: string;
+  freeText?: string;
+  yes?: boolean;
+  json?: boolean;
+};
+
+export async function runFirClose(
+  env: ReqportEnv,
+  firId: string,
+  opts: FirCloseOptions
+): Promise<number> {
+  const parsed = (await readJsonInput({ file: opts.file, body: opts.body }, "close")) ?? {};
+  const base = asRecord(parsed, "close body");
+
+  const reason = (opts.reason ??
+    (typeof base.reason === "string" ? base.reason : undefined)) as FirCloseReason | undefined;
+  const freeText =
+    opts.freeText ?? (typeof base.free_text === "string" ? base.free_text : undefined);
+
+  const body: FirCloseRequest = {
+    reason: reason as FirCloseReason,
+    ...(freeText ? { free_text: freeText } : {}),
+  };
+
+  if (!opts.json) {
+    line(`Closing FIR case ${firId}:`);
+    line(`  reason: ${body.reason ?? "(missing)"}`);
+    if (freeText) line(`  free_text: “${freeText}”`);
+    line("");
+  }
+  if (!(await confirmAction(opts, "Close this FIR case?"))) return 1;
+
+  const result = await performFirClose(await clientFor(env), firId, body);
+  if (opts.json) {
+    printJson(result);
+    return 0;
+  }
+  line(`FIR case ${firId} closed (${body.reason}).`);
   line("Verify:  qp fir show " + firId);
   return 0;
 }

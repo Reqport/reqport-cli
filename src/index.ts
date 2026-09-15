@@ -588,6 +588,67 @@ async function main(): Promise<void> {
       })()
     );
 
+  fir
+    .command("update <firId>")
+    .description("Post a lifecycle UPDATE to a FIR case (either party) — POST …/{firId}/update")
+    .option(
+      "--update-type <type>",
+      "CORRECTION | LAW_ENFORCEMENT_REFERENCE_ADDED | ADDITIONAL_TRANSACTIONS | STATUS_CHANGE | QUESTION | ANSWER (required)"
+    )
+    .option(
+      "--status <status>",
+      "fraud status for STATUS_CHANGE: SUSPECTED | STRONG_SUSPICION | CONFIRMED | CLEARED"
+    )
+    .option("--law-enforcement-scheme <scheme>", "law-enforcement reference scheme (e.g. a police-case scheme)")
+    .option("--law-enforcement-reference <ref>", "law-enforcement reference value (e.g. the DNR / case reference)")
+    .option("--transactions <json>", "additional transactions as an inline JSON array (for ADDITIONAL_TRANSACTIONS)")
+    .option("--free-text <text>", "optional free-text (e.g. the QUESTION / ANSWER body)")
+    .option("--file <path>", "JSON file with the full snake_case body {update_type, …}")
+    .option("--body <json>", "the same body inline as a JSON string")
+    .option("-y, --yes", "skip the confirmation prompt", false)
+    .action((firId, opts) =>
+      wrap(async () => {
+        const { runFirUpdate } = await import("./commands/fir.js");
+        return runFirUpdate(globalEnv(), firId, {
+          file: opts.file,
+          body: opts.body,
+          updateType: opts.updateType,
+          status: opts.status,
+          lawEnforcementScheme: opts.lawEnforcementScheme,
+          lawEnforcementReference: opts.lawEnforcementReference,
+          transactions: opts.transactions,
+          freeText: opts.freeText,
+          yes: opts.yes,
+          json: globalJson(),
+        });
+      })()
+    );
+
+  fir
+    .command("close <firId>")
+    .description("Close a FIR case with a terminal reason (either party) — POST …/{firId}/close")
+    .option(
+      "--reason <reason>",
+      "REFUNDED | NOT_RECOVERABLE | NO_MATCH | WITHDRAWN | OTHER (required)"
+    )
+    .option("--free-text <text>", "optional free-text closing note")
+    .option("--file <path>", "JSON file with the full snake_case body {reason, free_text}")
+    .option("--body <json>", "the same body inline as a JSON string")
+    .option("-y, --yes", "skip the confirmation prompt", false)
+    .action((firId, opts) =>
+      wrap(async () => {
+        const { runFirClose } = await import("./commands/fir.js");
+        return runFirClose(globalEnv(), firId, {
+          file: opts.file,
+          body: opts.body,
+          reason: opts.reason,
+          freeText: opts.freeText,
+          yes: opts.yes,
+          json: globalJson(),
+        });
+      })()
+    );
+
   // ── kyc (KYC / CDD — Customer Due Diligence response) ───────────────────────
   const kyc = program
     .command("kyc")

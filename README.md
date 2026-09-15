@@ -92,6 +92,8 @@ The stored key lives at **`%APPDATA%\qp\credential.json`** (Windows) or
 | `qp fir confirm-refund <firId> --payload-id <uuid>` | Confirm a refund executed (receiver side) |
 | `qp fir identity-request <firId> --transaction-ref … --about-party … --legal-basis …` | Request the identity behind a fraud counterparty (either side) |
 | `qp fir identity-respond <firId> --record-status FOUND\|NOT_FOUND …` | Return that identity (receiver side) — inline subject or a pre-sealed payload |
+| `qp fir update <firId> --update-type …` | Post a lifecycle UPDATE (correction / law-enforcement ref / added transactions / status change / question / answer; either party) |
+| `qp fir close <firId> --reason …` | Close a FIR case with a terminal reason (either party) |
 | `qp kyc list [--state open] [--mine]` | Discover **KYC / CDD** checks addressed to you |
 | `qp kyc show <requestId>` | Content-blind read-back of a KYC/CDD response |
 | `qp kyc respond <requestId> --record-status FOUND\|NOT_FOUND …` | Answer a KYC/CDD request with the CDD record |
@@ -193,6 +195,8 @@ single request→response families, a FIR case is one workflow instance (its id 
 | **REFUND_CONFIRMATION** | `qp fir confirm-refund <firId>` | **receiver** | `POST /v1/fir/cases/{firId}/refund-confirmation` |
 | **IDENTITY_REQUEST** | `qp fir identity-request <firId>` | either party | `POST /v1/fir/cases/{firId}/identity-request` |
 | **IDENTITY_RESPONSE** | `qp fir identity-respond <firId>` | counterparty **receiver** | `POST /v1/fir/cases/{firId}/identity-response` |
+| **UPDATE** | `qp fir update <firId>` | either party | `POST /v1/fir/cases/{firId}/update` |
+| **CLOSE** | `qp fir close <firId>` | either party | `POST /v1/fir/cases/{firId}/close` |
 | read a case | `qp fir show <firId>` | either party | `GET /v1/fir/cases/{firId}` |
 
 **Roles.** The **bank** opens the case (`notify`) and later authorises refunds
@@ -303,12 +307,42 @@ disclosure (no cleartext PII may be held); a gated call returns `PENDING_APPROVA
 `--record-status` (`FOUND | NOT_FOUND`) and `--about-party` are validated
 client-side before the POST.
 
+### Lifecycle (`update` / `close`)
+
+Either party can post a lifecycle message on an open case. Unlike the other FIR
+bodies, the **`update` / `close` bodies are snake_case** on the wire and carry
+**no `sender`/`recipient`** — the case parties are already fixed by the workflow
+instance.
+
+```bash
+# EITHER PARTY: correct or extend the case (six update_types)
+qp fir update <firId> --update-type STATUS_CHANGE --status CONFIRMED
+qp fir update <firId> --update-type LAW_ENFORCEMENT_REFERENCE_ADDED \
+  --law-enforcement-scheme "SE-POLICE" --law-enforcement-reference "DNR-2026-123"
+qp fir update <firId> --update-type ADDITIONAL_TRANSACTIONS \
+  --transactions '[{"transactionRef":"t3","amount":{"amount":"500","currency":"SEK"}}]'
+qp fir update <firId> --update-type QUESTION --free-text "Any hold on t2 yet?"
+#   --update-type is CORRECTION | LAW_ENFORCEMENT_REFERENCE_ADDED |
+#     ADDITIONAL_TRANSACTIONS | STATUS_CHANGE | QUESTION | ANSWER (validated)
+#   STATUS_CHANGE REQUIRES --status (SUSPECTED|STRONG_SUSPICION|CONFIRMED|CLEARED)
+
+# EITHER PARTY: close the case with a terminal reason
+qp fir close <firId> --reason REFUNDED --free-text "full amount returned"
+#   --reason is REFUNDED | NOT_RECOVERABLE | NO_MATCH | WITHDRAWN | OTHER (validated)
+```
+
+`--update-type` / `--status` / `--reason` are validated client-side (listing the
+valid values on error) before the POST, and `update --update-type STATUS_CHANGE`
+fails fast when `--status` is omitted. Both bodies can also be supplied whole via
+`--file` / `--body` (snake_case keys); flags override.
+
 The mutating FIR commands (`notify`, `respond`, `instruct-refund`,
-`confirm-refund`, `identity-request`, `identity-respond`) prompt for confirmation
-on an interactive terminal; pass `-y`/`--yes` (or `--json`) to skip. Scopes:
-`notify` / `instruct-refund` / `identity-request` need `workflows:write`;
-`respond` / `confirm-refund` / `identity-respond` ride the response path
-(`responses:write`); `show` / `list` need `workflows:read` / discovery.
+`confirm-refund`, `identity-request`, `identity-respond`, `update`, `close`)
+prompt for confirmation on an interactive terminal; pass `-y`/`--yes` (or `--json`)
+to skip. Scopes: `notify` / `instruct-refund` / `identity-request` / `update` /
+`close` need `workflows:write`; `respond` / `confirm-refund` / `identity-respond`
+ride the response path (`responses:write`); `show` / `list` need `workflows:read`
+/ discovery.
 
 ## KYC / CDD — Customer Due Diligence response
 

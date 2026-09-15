@@ -31,6 +31,7 @@ import type {
   ChatView,
   DecryptBatchResponse,
   FirCaseView,
+  FirCloseRequest,
   FirConfirmRefundRequest,
   FirCreateNoticeRequest,
   FirIdentityRequestRequest,
@@ -38,6 +39,7 @@ import type {
   FirOpenCaseResult,
   FirRefundInstructionRequest,
   FirSubmitResponseRequest,
+  FirUpdateRequest,
   KycResponseSubmission,
   KycResponseView,
   PayloadMetaResponse,
@@ -583,6 +585,32 @@ export class ReqportClient {
   ): Promise<ResponseResult> {
     return this.request<ResponseResult>(
       `/v1/fir/cases/${encodeURIComponent(firId)}/identity-response`,
+      { method: "POST", idempotent: true, body: JSON.stringify(body) }
+    );
+  }
+
+  /**
+   * POST /v1/fir/cases/{firId}/update — post a lifecycle UPDATE to the case
+   * (either party). The body is snake_case (update_type, law_enforcement_reference,
+   * status, transactions, free_text) and carries NO sender/recipient — the parties
+   * are fixed by the workflow instance. Returns the assembled UPDATE wire envelope.
+   * Needs scope workflows:write.
+   */
+  updateFirCase(firId: string, body: FirUpdateRequest): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>(
+      `/v1/fir/cases/${encodeURIComponent(firId)}/update`,
+      { method: "POST", idempotent: true, body: JSON.stringify(body) }
+    );
+  }
+
+  /**
+   * POST /v1/fir/cases/{firId}/close — close the case with a terminal reason
+   * (either party). snake_case body (reason, free_text), no sender/recipient.
+   * Returns the assembled CLOSE wire envelope. Needs scope workflows:write.
+   */
+  closeFirCase(firId: string, body: FirCloseRequest): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>(
+      `/v1/fir/cases/${encodeURIComponent(firId)}/close`,
       { method: "POST", idempotent: true, body: JSON.stringify(body) }
     );
   }
