@@ -7,9 +7,12 @@ import { readFile } from "node:fs/promises";
 import { ReqportApiError, ReqportClient } from "./client.js";
 import {
   FIR_ABOUT_PARTIES,
+  FIR_CLOSE_REASONS,
+  FIR_FRAUD_STATUSES,
   FIR_IDENTITY_RECORD_STATUSES,
   FIR_OUTCOMES,
   FIR_RECEIVER_ACCOUNT_TYPES,
+  FIR_UPDATE_TYPES,
   KYC_PEP_STATUSES,
   KYC_RECORD_STATUSES,
   KYC_RELATIONSHIP_STATUSES,
@@ -23,6 +26,7 @@ import {
   type ChatTarget,
   type DecodedPayload,
   type FirCaseView,
+  type FirCloseRequest,
   type FirConfirmRefundRequest,
   type FirCreateNoticeRequest,
   type FirIdentityRequestRequest,
@@ -33,6 +37,7 @@ import {
   type FirRefundInstructionRequest,
   type FirResponseOutcome,
   type FirSubmitResponseRequest,
+  type FirUpdateRequest,
   type KycRecordStatus,
   type KycResponseSubmission,
   type KycResponseView,
@@ -654,6 +659,80 @@ export async function performFirIdentityRespond(
     );
   }
   return client.submitFirIdentityResponse(firId, body);
+}
+
+// ── FIR lifecycle (update / close) ─────────────────────────────────────────────
+
+/**
+ * Validate a FIR UPDATE body client-side (before the POST): sender + recipient are
+ * required; the nested update payload's update_type is required and enum-valid;
+ * status, when present, must be a valid fraud status; and update_type=STATUS_CHANGE
+ * requires a status (mirroring the vanta gate).
+ */
+export function validateFirUpdate(body: FirUpdateRequest): void {
+  if (!body || typeof body !== "object") throw new Error("an update body is required.");
+  if (!body.sender) throw new Error("sender is required.");
+  if (!body.recipient) throw new Error("recipient is required.");
+  const u = body.update;
+  if (!u || typeof u !== "object") throw new Error("update is required.");
+  if (!u.update_type) {
+    throw new Error(`update_type is required (one of ${FIR_UPDATE_TYPES.join(", ")}).`);
+  }
+  if (!(FIR_UPDATE_TYPES as readonly string[]).includes(u.update_type)) {
+    throw new Error(
+      `update_type "${String(u.update_type)}" is invalid — must be one of ${FIR_UPDATE_TYPES.join(", ")}.`
+    );
+  }
+  if (u.status !== undefined && !(FIR_FRAUD_STATUSES as readonly string[]).includes(u.status)) {
+    throw new Error(
+      `status "${String(u.status)}" is invalid — must be one of ${FIR_FRAUD_STATUSES.join(", ")}.`
+    );
+  }
+  if (u.update_type === "STATUS_CHANGE" && !u.status) {
+    throw new Error(
+      `update_type=STATUS_CHANGE requires --status (one of ${FIR_FRAUD_STATUSES.join(", ")}).`
+    );
+  }
+}
+
+/** Post a FIR lifecycle UPDATE. Validates then POSTs. Shared by CLI + MCP. */
+export async function performFirUpdate(
+  client: ReqportClient,
+  firId: string,
+  body: FirUpdateRequest
+): Promise<Record<string, unknown>> {
+  validateFirUpdate(body);
+  return client.updateFirCase(firId, body);
+}
+
+/**
+ * Validate a FIR CLOSE body client-side: sender + recipient are required; the
+ * nested close payload's reason is required and enum-valid.
+ */
+export function validateFirClose(body: FirCloseRequest): void {
+  if (!body || typeof body !== "object") throw new Error("a close body is required.");
+  if (!body.sender) throw new Error("sender is required.");
+  if (!body.recipient) throw new Error("recipient is required.");
+  const c = body.close;
+  if (!c || typeof c !== "object") throw new Error("close is required.");
+  if (!c.reason) {
+    throw new Error(`reason is required (one of ${FIR_CLOSE_REASONS.join(", ")}).`);
+  }
+  if (!(FIR_CLOSE_REASONS as readonly string[]).includes(c.reason)) {
+    throw new Error(
+      `reason "${String(c.reason)}" is invalid — must be one of ${FIR_CLOSE_REASONS.join(", ")}.`
+    );
+  }
+}
+
+/** Close a FIR case with a terminal reason. Validates then POSTs. Shared by CLI + MCP. */
+export async function performFirClose(
+  client: ReqportClient,
+  firId: string,
+  body: FirCloseRequest
+): Promise<Record<string, unknown>> {
+  validateFirClose(body);
+  return client.closeFirCase(firId, body);
 }
 
 // ── KYC / CDD — Customer Due Diligence response ───────────────────────────────

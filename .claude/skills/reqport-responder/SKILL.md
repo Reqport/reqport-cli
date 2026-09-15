@@ -128,6 +128,9 @@ Roles decide who runs what:
   `qp fir confirm-refund`.
 - **Identity-exchange**: either party may `qp fir identity-request` (ask who is
   behind a counterparty); the counterparty runs `qp fir identity-respond`.
+- **Lifecycle**: either party may `qp fir update` (correction, added
+  law-enforcement reference, extra transactions, fraud-status change, or a
+  question/answer) and `qp fir close` (terminal reason).
 
 Discovery reuses the responder loop: **there is no list-cases endpoint** — incoming
 cases surface through the same `/v1/affordances` discovery as `qp requests list`.
@@ -157,6 +160,14 @@ qp --env sandbox fir identity-request <firId> --file ./parties.json \
 # Counterparty receiver: return the identity (inline camelCase subject, or a pre-sealed payload)
 qp --env sandbox fir identity-respond <firId> --file ./identity-subject.json \
   --record-status FOUND --transaction-ref t1 --yes
+
+# Either party: post a lifecycle UPDATE (parties + nested snake_case payload)
+qp --env sandbox fir update <firId> --file ./parties.json \
+  --update-type STATUS_CHANGE --status CONFIRMED --yes
+
+# Either party: close the case with a terminal reason
+qp --env sandbox fir close <firId> --file ./parties.json \
+  --reason REFUNDED --free-text "full amount returned" --yes
 ```
 
 Body notes: each write body carries the two institutions (`sender`/`recipient`, from
@@ -178,6 +189,15 @@ gate, enforced client-side). `identity-respond` needs `--record-status`
 **inline** (via `--file`/`--body`, a subject or a full IdentityResponse) **or** as a
 pre-sealed `--payload-id` (required when your org gates identity disclosure; the call
 then returns `PENDING_APPROVAL`). Enums are validated client-side before the POST.
+
+**Lifecycle.** `update` needs `--update-type` (`CORRECTION |
+LAW_ENFORCEMENT_REFERENCE_ADDED | ADDITIONAL_TRANSACTIONS | STATUS_CHANGE |
+QUESTION | ANSWER`); `STATUS_CHANGE` also requires `--status` (`SUSPECTED |
+STRONG_SUSPICION | CONFIRMED | CLEARED`). `close` needs `--reason` (`REFUNDED |
+NOT_RECOVERABLE | NO_MATCH | WITHDRAWN | OTHER`). Both carry the two institutions
+(`sender`/`recipient`, like every FIR write) plus a **nested snake_case payload**
+under `update` / `close` (`{sender, recipient, update|close:{…}}`). Enums are
+validated client-side before the POST.
 
 ## KYC / CDD — Customer Due Diligence response
 
