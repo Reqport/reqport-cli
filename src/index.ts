@@ -11,7 +11,7 @@ import { Command } from "commander";
 import { resolveEnv } from "./env.js";
 import { explainError, err } from "./ui.js";
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 
 async function main(): Promise<void> {
   const program = new Command();
@@ -362,6 +362,150 @@ async function main(): Promise<void> {
       wrap(async () => {
         const { runAttachGet } = await import("./commands/attach.js");
         return runAttachGet(globalEnv(), attachmentId, { out: opts.out, json: globalJson() });
+      })()
+    );
+
+  // ── fir (Fraud Incident Response) ──────────────────────────────────────────
+  const fir = program
+    .command("fir")
+    .description(
+      "Fraud Incident Response: a multi-message FI-to-FI fraud case (notice → response → refund → confirm)"
+    );
+
+  fir
+    .command("list")
+    .description("Discover FIR cases addressed to you (via /v1/affordances; no list-cases endpoint)")
+    .option("-s, --state <state>", "affordance state", "open")
+    .option("--mine", "list your org's own FIR edges (/mine) instead of addressed-to-me", false)
+    .action((opts) =>
+      wrap(async () => {
+        const { runFirList } = await import("./commands/fir.js");
+        return runFirList(globalEnv(), { state: opts.state, mine: opts.mine, json: globalJson() });
+      })()
+    );
+
+  fir
+    .command("show <firId>")
+    .description("Read a FIR case (content-blind metadata) — GET /v1/fir/cases/{firId}")
+    .action((firId) =>
+      wrap(async () => {
+        const { runFirShow } = await import("./commands/fir.js");
+        return runFirShow(globalEnv(), firId, { json: globalJson() });
+      })()
+    );
+
+  fir
+    .command("notify")
+    .description("Open a FIR case with a NOTICE (sending-bank side) — POST /v1/fir/cases")
+    .option("--file <path>", "JSON file with the full body {sender, recipient, recipientOrgId, notice}")
+    .option("--body <json>", "the same body inline as a JSON string")
+    .option("-y, --yes", "skip the confirmation prompt", false)
+    .action((opts) =>
+      wrap(async () => {
+        const { runFirNotify } = await import("./commands/fir.js");
+        return runFirNotify(globalEnv(), {
+          file: opts.file,
+          body: opts.body,
+          yes: opts.yes,
+          json: globalJson(),
+        });
+      })()
+    );
+
+  fir
+    .command("respond <firId>")
+    .description("Answer a NOTICE with per-transaction outcomes (receiver side) — POST …/{firId}/response")
+    .option(
+      "--outcome <spec>",
+      "per-transaction outcome <transaction_ref>:<HELD|PROCESSED|PARTIAL|NEED_INFO>[:<heldAmount>:<currency>] (repeatable)",
+      (val: string, prev: string[]) => [...prev, val],
+      [] as string[]
+    )
+    .option("--note <text>", "optional free-text note")
+    .option("--sender <json>", "this message's sender institution as inline JSON (else from --file)")
+    .option("--recipient <json>", "this message's recipient institution as inline JSON (else from --file)")
+    .option("--file <path>", "JSON file with the full body {sender, recipient, outcomes, note}")
+    .option("--body <json>", "the same body inline as a JSON string")
+    .option("-y, --yes", "skip the confirmation prompt", false)
+    .action((firId, opts) =>
+      wrap(async () => {
+        const { runFirRespond } = await import("./commands/fir.js");
+        return runFirRespond(globalEnv(), firId, {
+          file: opts.file,
+          body: opts.body,
+          sender: opts.sender,
+          recipient: opts.recipient,
+          outcome: opts.outcome,
+          note: opts.note,
+          yes: opts.yes,
+          json: globalJson(),
+        });
+      })()
+    );
+
+  fir
+    .command("instruct-refund <firId>")
+    .description("Instruct a refund of a held transaction (bank side) — POST …/{firId}/refund-instruction")
+    .option("--transaction-ref <ref>", "the transaction to refund")
+    .option("--return-to <json>", "the return account as inline JSON (an Account object)")
+    .option("--return-iban <iban>", "shortcut: build return_to from an IBAN")
+    .option("--return-account-type <type>", "shortcut: return_to accountType")
+    .option("--return-label <label>", "shortcut: return_to label")
+    .option("--reference-text <text>", "return reference text")
+    .option("--verification-type <type>", "verification challenge type")
+    .option("--verification-description <text>", "verification challenge description")
+    .option("--confirmation-requested", "request an explicit REFUND_CONFIRMATION", false)
+    .option("--sender <json>", "this message's sender institution as inline JSON (else from --file)")
+    .option("--recipient <json>", "this message's recipient institution as inline JSON (else from --file)")
+    .option("--file <path>", "JSON file with the full body {sender, recipient, refundInstruction}")
+    .option("--body <json>", "the same body inline as a JSON string")
+    .option("-y, --yes", "skip the confirmation prompt", false)
+    .action((firId, opts) =>
+      wrap(async () => {
+        const { runFirInstructRefund } = await import("./commands/fir.js");
+        return runFirInstructRefund(globalEnv(), firId, {
+          file: opts.file,
+          body: opts.body,
+          sender: opts.sender,
+          recipient: opts.recipient,
+          transactionRef: opts.transactionRef,
+          returnTo: opts.returnTo,
+          returnIban: opts.returnIban,
+          returnAccountType: opts.returnAccountType,
+          returnLabel: opts.returnLabel,
+          referenceText: opts.referenceText,
+          verificationType: opts.verificationType,
+          verificationDescription: opts.verificationDescription,
+          confirmationRequested: opts.confirmationRequested,
+          yes: opts.yes,
+          json: globalJson(),
+        });
+      })()
+    );
+
+  fir
+    .command("confirm-refund <firId>")
+    .description("Confirm a refund executed (receiver side) — POST …/{firId}/refund-confirmation")
+    .option("--payload-id <uuid>", "a pre-sealed RefundExecution payloadId (docType FIR_REFUND_JSON)")
+    .option("--note <text>", "optional free-text note")
+    .option("--sender <json>", "this message's sender institution as inline JSON (else from --file)")
+    .option("--recipient <json>", "this message's recipient institution as inline JSON (else from --file)")
+    .option("--file <path>", "JSON file with the full body {sender, recipient, payloadId, note}")
+    .option("--body <json>", "the same body inline as a JSON string")
+    .option("-y, --yes", "skip the confirmation prompt", false)
+    .action((firId, opts) =>
+      wrap(async () => {
+        const { runFirConfirmRefund } = await import("./commands/fir.js");
+        return runFirConfirmRefund(globalEnv(), firId, {
+          file: opts.file,
+          body: opts.body,
+          sender: opts.sender,
+          recipient: opts.recipient,
+          payloadId: opts.payloadId,
+          note: opts.note,
+          yes: opts.yes,
+          json: globalJson(),
+        });
       })()
     );
 

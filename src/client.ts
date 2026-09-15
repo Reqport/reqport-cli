@@ -30,6 +30,12 @@ import type {
   ChatTarget,
   ChatView,
   DecryptBatchResponse,
+  FirCaseView,
+  FirConfirmRefundRequest,
+  FirCreateNoticeRequest,
+  FirOpenCaseResult,
+  FirRefundInstructionRequest,
+  FirSubmitResponseRequest,
   PayloadMetaResponse,
   PendingActionResult,
   PendingListResponse,
@@ -475,6 +481,71 @@ export class ReqportClient {
   listAttachments(target: ChatTarget): Promise<AttachmentView[]> {
     const q = `?target=${encodeURIComponent(`${target.kind}:${target.id}`)}`;
     return this.request<AttachmentView[]>(`/v1/attachments${q}`, { method: "GET" });
+  }
+
+  // ── FIR — Fraud Incident Response ──────────────────────────────────────────
+  //
+  // A FIR is a multi-message FI-to-FI fraud case (NOTICE → RESPONSE →
+  // REFUND_INSTRUCTION → REFUND_CONFIRMATION), one workflow instance whose id is
+  // the fir_id. There is NO list-cases endpoint — a receiver discovers incoming
+  // cases through the same /v1/affordances discovery the responder loop uses
+  // (FIR cases are FIR_FRAUD_CASE_V1 workflow instances addressed to them).
+  //
+  // Request bodies are camelCase (Jackson default; the sealed envelope Vanta
+  // assembles server-side is snake_case, but that is not the body we send).
+  // Scopes: create/instruct need workflows:write; response/confirm delegate to
+  // the response path (responses:write); read needs workflows:read.
+
+  /** POST /v1/fir/cases — open a case with a NOTICE (sending bank → receiver). */
+  createFirNotice(body: FirCreateNoticeRequest): Promise<FirOpenCaseResult> {
+    return this.request<FirOpenCaseResult>(`/v1/fir/cases`, {
+      method: "POST",
+      idempotent: true,
+      body: JSON.stringify(body),
+    });
+  }
+
+  /** POST /v1/fir/cases/{firId}/response — per-transaction RESPONSE (receiver → bank). */
+  submitFirResponse(firId: string, body: FirSubmitResponseRequest): Promise<ResponseResult> {
+    return this.request<ResponseResult>(
+      `/v1/fir/cases/${encodeURIComponent(firId)}/response`,
+      { method: "POST", idempotent: true, body: JSON.stringify(body) }
+    );
+  }
+
+  /**
+   * POST /v1/fir/cases/{firId}/refund-instruction — instruct a refund
+   * (sending bank → receiver). Returns the assembled REFUND_INSTRUCTION wire
+   * envelope (an arbitrary JSON object).
+   */
+  instructFirRefund(
+    firId: string,
+    body: FirRefundInstructionRequest
+  ): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>(
+      `/v1/fir/cases/${encodeURIComponent(firId)}/refund-instruction`,
+      { method: "POST", idempotent: true, body: JSON.stringify(body) }
+    );
+  }
+
+  /**
+   * POST /v1/fir/cases/{firId}/refund-confirmation — confirm a refund executed
+   * (receiver → bank). The RefundExecution is supplied as a pre-sealed
+   * payloadId so the receiver's per-type human-approval hold (#253) can gate it
+   * (202 PENDING_APPROVAL) without holding cleartext.
+   */
+  confirmFirRefund(firId: string, body: FirConfirmRefundRequest): Promise<ResponseResult> {
+    return this.request<ResponseResult>(
+      `/v1/fir/cases/${encodeURIComponent(firId)}/refund-confirmation`,
+      { method: "POST", idempotent: true, body: JSON.stringify(body) }
+    );
+  }
+
+  /** GET /v1/fir/cases/{firId} — content-blind case metadata (party-only). */
+  getFirCase(firId: string): Promise<FirCaseView> {
+    return this.request<FirCaseView>(`/v1/fir/cases/${encodeURIComponent(firId)}`, {
+      method: "GET",
+    });
   }
 }
 

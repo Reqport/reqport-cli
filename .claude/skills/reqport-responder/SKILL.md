@@ -113,6 +113,49 @@ has run.
    moved to `RESPONDED` with outcome `NFOU` (false) or `NORMAL` (true). Add
    `--json` to any command for machine-readable output you can assert on.
 
+## FIR — Fraud Incident Response (multi-message cases)
+
+Beyond the single request→response families, `qp` drives **FIR** — a multi-message
+**FI-to-FI fraud case** between a **sending bank** and a **receiving institution**
+(a client-funds holder). One workflow instance (its id is the `firId`) carries four
+messages: **NOTICE → RESPONSE → REFUND_INSTRUCTION → REFUND_CONFIRMATION**.
+
+Roles decide who runs what:
+
+- **Sending bank**: `qp fir notify` (open the case) and `qp fir instruct-refund`.
+- **Receiver**: `qp fir respond` (one outcome per transaction) and
+  `qp fir confirm-refund`.
+
+Discovery reuses the responder loop: **there is no list-cases endpoint** — incoming
+cases surface through the same `/v1/affordances` discovery as `qp requests list`.
+
+```bash
+# Receiver: discover + read
+qp --env sandbox fir list
+qp --env sandbox fir show <firId>
+
+# Receiver: answer per transaction (outcome enum validated client-side)
+qp --env sandbox fir respond <firId> --file ./parties.json \
+  --outcome t1:HELD:9300:SEK --outcome t2:NEED_INFO --yes
+
+# Bank: open a case, then instruct a refund
+qp --env sandbox fir notify --file ./notice.json --yes
+qp --env sandbox fir instruct-refund <firId> --file ./parties.json \
+  --transaction-ref t1 --return-iban SE45… --reference-text "fraud refund" --yes
+
+# Receiver: confirm a refund (pre-sealed RefundExecution payload; may be held for approval)
+qp --env sandbox fir confirm-refund <firId> --file ./parties.json --payload-id <uuid> --yes
+```
+
+Body notes: each write body carries the two institutions (`sender`/`recipient`, from
+`--file`/`--body` or inline `--sender`/`--recipient`) plus a payload. **Wire fields
+are camelCase** (`transactionRef`, `accountType`, `heldAmount`, `returnTo`, …) and
+**`money.amount` is a STRING**. `--outcome` is
+`<transaction_ref>:<HELD|PROCESSED|PARTIAL|NEED_INFO>[:<heldAmount>:<currency>]`. A
+receiver `accountType` is constrained to `CLIENT_FUNDS | OMNIBUS | MERCHANT`. A
+`confirm-refund` may be **held** by your org's approval policy → work it with
+`qp pending …`.
+
 ## Driving it programmatically (MCP)
 
 For an agent integration, run the bundled stdio MCP server instead of shelling
@@ -124,10 +167,12 @@ npx @reqport/cli mcp        # REQPORT_API_KEY + REQPORT_ENV from the environment
 
 Tools: `reqport_doctor`, `reqport_list_requests`, `reqport_show_request`,
 `reqport_decrypt_payloads`, `reqport_respond_business_relationship` (accepts
-`relationshipTypes`), `reqport_respond`, plus the human-in-the-loop tools
+`relationshipTypes`), `reqport_respond`, the human-in-the-loop tools
 `reqport_pending_list`, `reqport_pending_approve`, `reqport_pending_reject`,
-`reqport_pending_withdraw`, `reqport_approval_policy_get`, and
-`reqport_approval_policy_set`. Each accepts an optional `env`; the credential comes from the
+`reqport_pending_withdraw`, `reqport_approval_policy_get`,
+`reqport_approval_policy_set`, and the FIR tools `reqport_fir_list`,
+`reqport_fir_show`, `reqport_fir_notify`, `reqport_fir_respond`,
+`reqport_fir_instruct_refund`, `reqport_fir_confirm_refund`. Each accepts an optional `env`; the credential comes from the
 server process environment. The MCP server is **API-key-only** — `qp login` is a
 human/CLI concern and is not exposed as a tool.
 

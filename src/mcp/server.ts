@@ -19,16 +19,32 @@ import { ReqportClient } from "../client.js";
 import { readApiKey, resolveEnv, type ReqportEnv } from "../env.js";
 import {
   decodePayloads,
+  firAffordanceGroups,
   mimeTypeForFilename,
   parseAccountArg,
   parseTarget,
+  performFirConfirmRefund,
+  performFirInstructRefund,
+  performFirNotify,
+  performFirRespond,
   performRespond,
+  readFirCase,
   readRequest,
 } from "../core.js";
 import { explainError } from "../ui.js";
-import { RELATIONSHIP_TYPES, type AccountInstrument, type RelationshipType } from "../types.js";
+import {
+  FIR_OUTCOMES,
+  FIR_RECEIVER_ACCOUNT_TYPES,
+  RELATIONSHIP_TYPES,
+  type AccountInstrument,
+  type FirCreateNoticeRequest,
+  type FirRefundInstruction,
+  type FirRefundInstructionRequest,
+  type FirResponseOutcome,
+  type RelationshipType,
+} from "../types.js";
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 
 const envSchema = z
   .enum(["sandbox", "uat", "prod"])
@@ -577,6 +593,270 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
     async ({ env, responseTypes }) => {
       try {
         return ok(await clientFor(env ?? defaultEnv).setApprovalPolicy(responseTypes));
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  // ── FIR — Fraud Incident Response ────────────────────────────────────────────
+  //
+  // Structured tools mirroring the CLI `qp fir …` commands. Bodies are camelCase
+  // on the wire (Jackson default; the sealed envelope Vanta assembles is
+  // snake_case, but that is not the body). money.amount is a decimal STRING.
+
+  const firEntityIdentifierSchema = z
+    .object({ scheme: z.string(), value: z.string() })
+    .describe("Legal-entity identifier (base scheme LEI; overlays add national schemes).");
+
+  const firInstitutionSchema = z
+    .object({
+      identifier: firEntityIdentifierSchema,
+      name: z.string().optional(),
+      team: z.string().optional(),
+      handlerId: z.string().optional(),
+      contact: z.string().optional(),
+    })
+    .describe("A financial institution party to the case.");
+
+  const firMoneySchema = z
+    .object({
+      amount: z.string().describe("Exact decimal amount as a STRING (never a number)."),
+      currency: z.string(),
+    })
+    .describe("A monetary amount; amount is a decimal STRING.");
+
+  const firAccountSchema = z
+    .object({
+      accountType: z.string().optional(),
+      iban: z.string().optional(),
+      accountNumber: z.string().optional(),
+      maskedPan: z.string().optional(),
+      merchantId: z.string().optional(),
+      merchantName: z.string().optional(),
+      label: z.string().optional(),
+      national: z.record(z.string(), z.unknown()).optional(),
+    })
+    .describe("A neutral account/instrument reference.");
+
+  const firReceiverAccountSchema = firAccountSchema
+    .extend({
+      accountType: z
+        .enum(FIR_RECEIVER_ACCOUNT_TYPES)
+        .describe("Receiver accounts are pooled/non-personal: CLIENT_FUNDS | OMNIBUS | MERCHANT."),
+    })
+    .describe("The pooled/non-personal receiver account a fraudulent payment reached.");
+
+  const firTransactionSchema = z
+    .object({
+      transactionRef: z.string().optional(),
+      rail: z.string().optional(),
+      amount: firMoneySchema.optional(),
+      executedAt: z.string().optional(),
+      paymentReference: z.string().optional(),
+      sender: firAccountSchema.optional(),
+      receiver: firReceiverAccountSchema.optional(),
+      card: z
+        .object({
+          merchantId: z.string().optional(),
+          merchantName: z.string().optional(),
+          authorizationCode: z.string().optional(),
+        })
+        .optional(),
+    })
+    .describe("One fraudulent inbound payment being reported.");
+
+  const firNoticeSchema = z
+    .object({
+      externalCaseId: z.string().optional(),
+      status: z.string().optional(),
+      fraudType: z.string().optional(),
+      muleTier: z.string().optional(),
+      lawEnforcementReference: z
+        .object({ scheme: z.string(), reference: z.string() })
+        .optional(),
+      requestedAction: z.string().optional(),
+      transactions: z.array(firTransactionSchema).min(1),
+      freeText: z.string().optional(),
+    })
+    .describe("NOTICE payload: report fraud + ask to hold funds.");
+
+  const firResponseOutcomeSchema = z
+    .object({
+      transactionRef: z.string(),
+      outcome: z.enum(FIR_OUTCOMES),
+      heldAmount: firMoneySchema.optional(),
+      refundPossible: z.boolean().optional(),
+      infoNeeded: z.array(z.string()).optional(),
+      relatedTransactions: z.array(firTransactionSchema).optional(),
+      freeText: z.string().optional(),
+    })
+    .describe("One per-transaction RESPONSE outcome (HELD | PROCESSED | PARTIAL | NEED_INFO).");
+
+  const firRefundInstructionSchema = z
+    .object({
+      transactionRef: z.string(),
+      returnTo: firAccountSchema,
+      returnReferenceText: z.string().optional(),
+      verification: z
+        .object({
+          challengeType: z.string().optional(),
+          description: z.string().optional(),
+          national: z.record(z.string(), z.unknown()).optional(),
+        })
+        .optional(),
+      confirmationRequested: z.boolean().optional(),
+    })
+    .describe("REFUND_INSTRUCTION payload: authorise a refund of a held transaction.");
+
+  server.registerTool(
+    "reqport_fir_list",
+    {
+      title: "List FIR cases",
+      description:
+        "Discover FIR (Fraud Incident Response) cases addressed to your org. FIR cases are FIR_FRAUD_CASE_V1 workflow instances that surface through the SAME GET /v1/affordances discovery as reqport_list_requests — there is no list-cases endpoint. Returns the FIR-case affordance groups only.",
+      inputSchema: {
+        env: envSchema,
+        state: z.string().optional().describe("Affordance state (default open)."),
+        mine: z.boolean().optional().describe("List owned FIR edges (/mine) instead of addressed-to-me."),
+      },
+    },
+    async ({ env, state, mine }) => {
+      try {
+        const res = await clientFor(env ?? defaultEnv).listAffordances({ state: state ?? "open", mine });
+        const groups = firAffordanceGroups(res);
+        return ok({ total: groups.reduce((n, g) => n + (g.items?.length ?? 0), 0), groups });
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "reqport_fir_show",
+    {
+      title: "Read a FIR case",
+      description:
+        "Read a FIR case's content-blind metadata via GET /v1/fir/cases/{firId}: fir_id, workflow type, status, response outcome, and the party org ids. Sealed message payloads are not decrypted here.",
+      inputSchema: { env: envSchema, firId: z.string().describe("The FIR case id.") },
+    },
+    async ({ env, firId }) => {
+      try {
+        return ok(await readFirCase(clientFor(env ?? defaultEnv), firId));
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "reqport_fir_notify",
+    {
+      title: "Open a FIR case (NOTICE)",
+      description:
+        "Open a FIR case with a NOTICE (sending-bank side) via POST /v1/fir/cases. The bank reports one or more fraudulent inbound payments to the receiving institution and asks whether the funds can be held. Returns the fir_id (the case id) + the assembled NOTICE envelope. Needs scope workflows:write.",
+      inputSchema: {
+        env: envSchema,
+        sender: firInstitutionSchema,
+        recipient: firInstitutionSchema,
+        recipientOrgId: z.string().describe("The receiver's consortium org id (the delivery target)."),
+        notice: firNoticeSchema,
+      },
+    },
+    async ({ env, sender, recipient, recipientOrgId, notice }) => {
+      try {
+        const body = { sender, recipient, recipientOrgId, notice } as FirCreateNoticeRequest;
+        return ok(await performFirNotify(clientFor(env ?? defaultEnv), body));
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "reqport_fir_respond",
+    {
+      title: "Answer a FIR NOTICE (RESPONSE)",
+      description:
+        "Answer a FIR NOTICE with per-transaction outcomes (receiver side) via POST /v1/fir/cases/{firId}/response. One outcome per transaction: HELD | PROCESSED | PARTIAL | NEED_INFO. money.amount is a decimal STRING. Needs scope responses:write.",
+      inputSchema: {
+        env: envSchema,
+        firId: z.string(),
+        sender: firInstitutionSchema,
+        recipient: firInstitutionSchema,
+        outcomes: z.array(firResponseOutcomeSchema).min(1),
+        note: z.string().optional(),
+      },
+    },
+    async ({ env, firId, sender, recipient, outcomes, note }) => {
+      try {
+        return ok(
+          await performFirRespond(clientFor(env ?? defaultEnv), firId, {
+            sender,
+            recipient,
+            outcomes: outcomes as FirResponseOutcome[],
+            note,
+          })
+        );
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "reqport_fir_instruct_refund",
+    {
+      title: "Instruct a FIR refund",
+      description:
+        "Instruct a refund of a held transaction (bank side) via POST /v1/fir/cases/{firId}/refund-instruction: the return account, reference text, and a verification challenge. Sealed dual-copy to both parties. Needs scope workflows:write.",
+      inputSchema: {
+        env: envSchema,
+        firId: z.string(),
+        sender: firInstitutionSchema,
+        recipient: firInstitutionSchema,
+        refundInstruction: firRefundInstructionSchema,
+      },
+    },
+    async ({ env, firId, sender, recipient, refundInstruction }) => {
+      try {
+        const body = {
+          sender,
+          recipient,
+          refundInstruction: refundInstruction as FirRefundInstruction,
+        } as FirRefundInstructionRequest;
+        return ok(await performFirInstructRefund(clientFor(env ?? defaultEnv), firId, body));
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "reqport_fir_confirm_refund",
+    {
+      title: "Confirm a FIR refund",
+      description:
+        "Confirm a refund executed (receiver side) via POST /v1/fir/cases/{firId}/refund-confirmation. The RefundExecution is supplied as a pre-sealed payloadId (docType FIR_REFUND_JSON) so the receiver's per-type human-approval policy can hold it (202 PENDING_APPROVAL) without holding cleartext. Needs scope responses:write.",
+      inputSchema: {
+        env: envSchema,
+        firId: z.string(),
+        sender: firInstitutionSchema,
+        recipient: firInstitutionSchema,
+        payloadId: z.string().describe("A pre-sealed RefundExecution payloadId (docType FIR_REFUND_JSON)."),
+        note: z.string().optional(),
+      },
+    },
+    async ({ env, firId, sender, recipient, payloadId, note }) => {
+      try {
+        return ok(
+          await performFirConfirmRefund(clientFor(env ?? defaultEnv), firId, {
+            sender,
+            recipient,
+            payloadId,
+            note,
+          })
+        );
       } catch (e) {
         return fail(e);
       }

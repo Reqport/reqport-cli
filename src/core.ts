@@ -3,12 +3,25 @@
  * the two surfaces behave identically. No console output here — callers render.
  */
 
+import { readFile } from "node:fs/promises";
 import { ReqportApiError, ReqportClient } from "./client.js";
 import {
+  FIR_OUTCOMES,
+  FIR_RECEIVER_ACCOUNT_TYPES,
   RELATIONSHIP_TYPES,
   type AccountInstrument,
+  type AffordanceGroup,
+  type AffordanceListResponse,
   type ChatTarget,
   type DecodedPayload,
+  type FirCaseView,
+  type FirConfirmRefundRequest,
+  type FirCreateNoticeRequest,
+  type FirOpenCaseResult,
+  type FirOutcome,
+  type FirRefundInstructionRequest,
+  type FirResponseOutcome,
+  type FirSubmitResponseRequest,
   type PayloadMetaResponse,
   type RelationshipType,
   type ResponseResult,
@@ -356,4 +369,190 @@ export async function performRespond(
     submitted: submission as Record<string, unknown>,
     result,
   };
+}
+
+// ── FIR — Fraud Incident Response ─────────────────────────────────────────────
+
+/** The workflow type of a FIR case (one workflow instance per case). */
+export const FIR_WORKFLOW_TYPE = "FIR_FRAUD_CASE_V1";
+
+/**
+ * Does this workflow/edge type belong to a FIR case? Used to filter the shared
+ * /v1/affordances discovery down to FIR cases (there is no list-cases endpoint).
+ * Kept broad so it matches whether the affordance projection labels the edge as
+ * the workflow type (FIR_FRAUD_CASE_V1) or a kernel fraud edge.
+ */
+export function isFirWorkflowType(t: string | undefined): boolean {
+  if (!t) return false;
+  const u = t.toUpperCase();
+  return u.includes("FIR_FRAUD") || u.includes("FRAUD_INCIDENT") || u.includes("FRAUD_CLAIM");
+}
+
+/** The FIR-case affordance groups from a /v1/affordances response. */
+export function firAffordanceGroups(res: AffordanceListResponse): AffordanceGroup[] {
+  return (res.groups ?? []).filter((g) => isFirWorkflowType(g.edgeType));
+}
+
+/**
+ * Read a JSON body from a `--file <path>` and/or an inline `--body <json>` (at
+ * most one). Returns undefined when neither is given. Shared by the FIR commands.
+ */
+export async function readJsonInput(
+  input: { file?: string; body?: string },
+  label: string
+): Promise<unknown> {
+  if (input.file !== undefined && input.body !== undefined) {
+    throw new Error(`Provide only one of --file or --body for ${label}.`);
+  }
+  let raw: string;
+  if (input.file !== undefined) {
+    try {
+      raw = await readFile(input.file, "utf-8");
+    } catch (e) {
+      throw new Error(`Cannot read --file "${input.file}" for ${label}: ${(e as Error).message}`);
+    }
+  } else if (input.body !== undefined) {
+    raw = input.body;
+  } else {
+    return undefined;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    throw new Error(`${label}: input is not valid JSON: ${(e as Error).message}`);
+  }
+}
+
+/**
+ * Parse a `--outcome <transaction_ref>:<OUTCOME>[:<heldAmount>:<currency>]`
+ * argument into a validated FirResponseOutcome. The outcome enum is validated
+ * (listing valid values on error); a held amount, when present, needs BOTH the
+ * amount and currency and is carried as a decimal STRING.
+ */
+export function parseFirOutcomeArg(raw: string): FirResponseOutcome {
+  const parts = raw.split(":");
+  const transactionRef = (parts[0] ?? "").trim();
+  if (!transactionRef) {
+    throw new Error(
+      `Invalid --outcome "${raw}": missing transaction ref (format <transaction_ref>:<OUTCOME>[:<heldAmount>:<currency>]).`
+    );
+  }
+  const outcome = (parts[1] ?? "").trim().toUpperCase();
+  if (!(FIR_OUTCOMES as readonly string[]).includes(outcome)) {
+    throw new Error(
+      `Invalid --outcome "${raw}": outcome must be one of ${FIR_OUTCOMES.join(", ")}.`
+    );
+  }
+  const result: FirResponseOutcome = { transactionRef, outcome: outcome as FirOutcome };
+  const amount = parts[2]?.trim();
+  const currency = parts[3]?.trim();
+  if (amount || currency) {
+    if (!amount || !currency) {
+      throw new Error(
+        `Invalid --outcome "${raw}": a held amount needs both amount and currency (…:<heldAmount>:<currency>).`
+      );
+    }
+    result.heldAmount = { amount, currency };
+  }
+  return result;
+}
+
+/** Validate a FIR RESPONSE outcome's enum (used for flag- and file-built outcomes). */
+export function validateFirOutcome(o: FirResponseOutcome): void {
+  if (!o || typeof o !== "object") throw new Error("each outcome must be an object.");
+  if (!o.transactionRef) throw new Error("each outcome requires a transactionRef.");
+  if (!(FIR_OUTCOMES as readonly string[]).includes(o.outcome)) {
+    throw new Error(
+      `Invalid outcome "${String(o.outcome)}" for ${o.transactionRef}: must be one of ${FIR_OUTCOMES.join(", ")}.`
+    );
+  }
+}
+
+/**
+ * Validate a create-notice body's required top-level fields (client-side, before
+ * the POST): sender, recipient, recipientOrgId, a notice with ≥1 transaction, and
+ * each transaction's receiver.accountType constrained to the pooled/non-personal
+ * set (CLIENT_FUNDS | OMNIBUS | MERCHANT).
+ */
+export function validateFirCreateNotice(body: FirCreateNoticeRequest): void {
+  if (!body || typeof body !== "object") throw new Error("a notice body is required.");
+  if (!body.sender) throw new Error("sender is required.");
+  if (!body.recipient) throw new Error("recipient is required.");
+  if (!body.recipientOrgId) throw new Error("recipientOrgId (the delivery target org id) is required.");
+  if (!body.notice) throw new Error("notice is required.");
+  const txns = body.notice.transactions;
+  if (!Array.isArray(txns) || txns.length === 0) {
+    throw new Error("notice.transactions must contain at least one transaction.");
+  }
+  txns.forEach((t, i) => {
+    const at = t?.receiver?.accountType;
+    if (!at) {
+      throw new Error(`notice.transactions[${i}].receiver.accountType is required.`);
+    }
+    if (!(FIR_RECEIVER_ACCOUNT_TYPES as readonly string[]).includes(at)) {
+      throw new Error(
+        `notice.transactions[${i}].receiver.accountType "${at}" is invalid — must be one of ${FIR_RECEIVER_ACCOUNT_TYPES.join(", ")}.`
+      );
+    }
+  });
+}
+
+/** Open a FIR case with a NOTICE. Validates then POSTs. Shared by CLI + MCP. */
+export async function performFirNotify(
+  client: ReqportClient,
+  body: FirCreateNoticeRequest
+): Promise<FirOpenCaseResult> {
+  validateFirCreateNotice(body);
+  return client.createFirNotice(body);
+}
+
+/** Submit a FIR RESPONSE (per-transaction outcomes). Validates then POSTs. */
+export async function performFirRespond(
+  client: ReqportClient,
+  firId: string,
+  body: FirSubmitResponseRequest
+): Promise<ResponseResult> {
+  if (!body.sender) throw new Error("sender is required.");
+  if (!body.recipient) throw new Error("recipient is required.");
+  if (!Array.isArray(body.outcomes) || body.outcomes.length === 0) {
+    throw new Error("at least one response outcome is required (--outcome, or a --file/--body).");
+  }
+  body.outcomes.forEach(validateFirOutcome);
+  return client.submitFirResponse(firId, body);
+}
+
+/** Instruct a FIR refund. Validates then POSTs. */
+export async function performFirInstructRefund(
+  client: ReqportClient,
+  firId: string,
+  body: FirRefundInstructionRequest
+): Promise<Record<string, unknown>> {
+  if (!body.sender) throw new Error("sender is required.");
+  if (!body.recipient) throw new Error("recipient is required.");
+  const ri = body.refundInstruction;
+  if (!ri || typeof ri !== "object") throw new Error("refundInstruction is required.");
+  if (!ri.transactionRef) throw new Error("refundInstruction.transactionRef is required.");
+  if (!ri.returnTo) throw new Error("refundInstruction.returnTo (the return account) is required.");
+  return client.instructFirRefund(firId, body);
+}
+
+/** Confirm a FIR refund via a pre-sealed RefundExecution payloadId. Validates then POSTs. */
+export async function performFirConfirmRefund(
+  client: ReqportClient,
+  firId: string,
+  body: FirConfirmRefundRequest
+): Promise<ResponseResult> {
+  if (!body.sender) throw new Error("sender is required.");
+  if (!body.recipient) throw new Error("recipient is required.");
+  if (!body.payloadId) {
+    throw new Error(
+      "--payload-id (a pre-sealed RefundExecution payloadId, docType FIR_REFUND_JSON) is required."
+    );
+  }
+  return client.confirmFirRefund(firId, body);
+}
+
+/** Read a FIR case (content-blind metadata). */
+export async function readFirCase(client: ReqportClient, firId: string): Promise<FirCaseView> {
+  return client.getFirCase(firId);
 }
