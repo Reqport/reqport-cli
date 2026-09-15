@@ -11,7 +11,7 @@ import { Command } from "commander";
 import { resolveEnv } from "./env.js";
 import { explainError, err } from "./ui.js";
 
-const VERSION = "0.5.0";
+const VERSION = "0.6.0";
 
 async function main(): Promise<void> {
   const program = new Command();
@@ -502,6 +502,85 @@ async function main(): Promise<void> {
           sender: opts.sender,
           recipient: opts.recipient,
           payloadId: opts.payloadId,
+          note: opts.note,
+          yes: opts.yes,
+          json: globalJson(),
+        });
+      })()
+    );
+
+  fir
+    .command("identity-request <firId>")
+    .description("Request the identity behind a fraud counterparty (either side) — POST …/{firId}/identity-request")
+    .option("--transaction-ref <ref>", "the fraud transaction the identity is about (required)")
+    .option("--about-party <party>", "whose identity: ORDER_CUSTOMER | ORIGINATOR (required)")
+    .option("--legal-basis <text>", "legal basis as free-text (→ legalBasis.description)")
+    .option("--legal-basis-token <token>", "legal basis: a policy/authorisation token")
+    .option("--legal-basis-scheme <scheme>", "legal basis: citation scheme")
+    .option("--legal-basis-reference <ref>", "legal basis: citation reference")
+    .option("--payment-reference <ref>", "optional payment reference to disambiguate")
+    .option(
+      "--requested-attribute <attr>",
+      "an identity attribute being requested (repeatable)",
+      (val: string, prev: string[]) => [...prev, val],
+      [] as string[]
+    )
+    .option("--free-text <text>", "optional free-text for the request")
+    .option("--sender <json>", "this message's sender institution as inline JSON (else from --file)")
+    .option("--recipient <json>", "this message's recipient institution as inline JSON (else from --file)")
+    .option("--file <path>", "JSON file with the full body {sender, recipient, identityRequest}")
+    .option("--body <json>", "the same body inline as a JSON string")
+    .option("-y, --yes", "skip the confirmation prompt", false)
+    .action((firId, opts) =>
+      wrap(async () => {
+        const { runFirIdentityRequest } = await import("./commands/fir.js");
+        return runFirIdentityRequest(globalEnv(), firId, {
+          file: opts.file,
+          body: opts.body,
+          sender: opts.sender,
+          recipient: opts.recipient,
+          transactionRef: opts.transactionRef,
+          aboutParty: opts.aboutParty,
+          legalBasis: opts.legalBasis,
+          legalBasisToken: opts.legalBasisToken,
+          legalBasisScheme: opts.legalBasisScheme,
+          legalBasisReference: opts.legalBasisReference,
+          paymentReference: opts.paymentReference,
+          requestedAttribute: opts.requestedAttribute,
+          freeText: opts.freeText,
+          yes: opts.yes,
+          json: globalJson(),
+        });
+      })()
+    );
+
+  fir
+    .command("identity-respond <firId>")
+    .description("Return the identity behind a fraud counterparty (receiver side) — POST …/{firId}/identity-response")
+    .requiredOption("--record-status <status>", "FOUND | NOT_FOUND (required)")
+    .option("--transaction-ref <ref>", "the transaction the identity is about (else from --file)")
+    .option("--about-party <party>", "optional: ORDER_CUSTOMER | ORIGINATOR")
+    .option("--payload-id <uuid>", "a pre-sealed identity document payloadId (instead of an inline subject)")
+    .option("--free-text <text>", "optional free-text for the response")
+    .option("--note <text>", "optional free-text note")
+    .option("--sender <json>", "this message's sender institution as inline JSON (else from --file)")
+    .option("--recipient <json>", "this message's recipient institution as inline JSON (else from --file)")
+    .option("--file <path>", "JSON file: the IdentityResponse or its camelCase subject {naturalPerson|legalPerson}")
+    .option("--body <json>", "the same inline as a JSON string")
+    .option("-y, --yes", "skip the confirmation prompt", false)
+    .action((firId, opts) =>
+      wrap(async () => {
+        const { runFirIdentityRespond } = await import("./commands/fir.js");
+        return runFirIdentityRespond(globalEnv(), firId, {
+          file: opts.file,
+          body: opts.body,
+          sender: opts.sender,
+          recipient: opts.recipient,
+          recordStatus: opts.recordStatus,
+          transactionRef: opts.transactionRef,
+          aboutParty: opts.aboutParty,
+          payloadId: opts.payloadId,
+          freeText: opts.freeText,
           note: opts.note,
           yes: opts.yes,
           json: globalJson(),

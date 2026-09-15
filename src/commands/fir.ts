@@ -28,6 +28,8 @@ import {
   firAffordanceGroups,
   parseFirOutcomeArg,
   performFirConfirmRefund,
+  performFirIdentityRequest,
+  performFirIdentityRespond,
   performFirInstructRefund,
   performFirNotify,
   performFirRespond,
@@ -38,7 +40,13 @@ import { confirm, line, printJson, table } from "../ui.js";
 import type {
   FirConfirmRefundRequest,
   FirCreateNoticeRequest,
+  FirIdentityRequest,
+  FirIdentityRequestRequest,
+  FirIdentityResponse,
+  FirIdentityResponseRequest,
+  FirIdentitySubject,
   FirInstitution,
+  FirLegalBasis,
   FirRefundInstruction,
   FirRefundInstructionRequest,
   FirResponseOutcome,
@@ -395,6 +403,238 @@ export async function runFirConfirmRefund(
   }
   const status = result.status ?? "(ok)";
   line(`Submitted REFUND_CONFIRMATION — status: ${status}`);
+  if (status === "PENDING_APPROVAL") {
+    line("  Held for human approval by your org's policy — release it with `qp pending approve <id>`.");
+  }
+  if (result.messageId) line(`  message id: ${result.messageId}`);
+  line("Verify:  qp fir show " + firId);
+  return 0;
+}
+
+// ── identity-request (IDENTITY_REQUEST) ───────────────────────────────────────
+
+export type FirIdentityRequestOptions = {
+  file?: string;
+  body?: string;
+  sender?: string;
+  recipient?: string;
+  transactionRef?: string;
+  aboutParty?: string;
+  legalBasis?: string; // free-text → legalBasis.description
+  legalBasisToken?: string;
+  legalBasisScheme?: string;
+  legalBasisReference?: string;
+  paymentReference?: string;
+  requestedAttribute?: string[];
+  freeText?: string;
+  yes?: boolean;
+  json?: boolean;
+};
+
+/**
+ * Build the legalBasis from the granular flags (structured token/scheme/reference
+ * plus a free-text description), falling back to the base body's legalBasis when
+ * no flag is given. Returns undefined only when nothing at all was supplied
+ * (perform… then raises the clear "at least one field" error).
+ */
+function buildLegalBasis(
+  opts: FirIdentityRequestOptions,
+  baseLb: FirLegalBasis | undefined
+): FirLegalBasis | undefined {
+  const anyFlag =
+    opts.legalBasis !== undefined ||
+    opts.legalBasisToken !== undefined ||
+    opts.legalBasisScheme !== undefined ||
+    opts.legalBasisReference !== undefined;
+  if (!anyFlag) return baseLb;
+  const lb: FirLegalBasis = {};
+  if (opts.legalBasisToken) lb.token = opts.legalBasisToken;
+  if (opts.legalBasisScheme) lb.scheme = opts.legalBasisScheme;
+  if (opts.legalBasisReference) lb.reference = opts.legalBasisReference;
+  if (opts.legalBasis) lb.description = opts.legalBasis;
+  return lb;
+}
+
+export async function runFirIdentityRequest(
+  env: ReqportEnv,
+  firId: string,
+  opts: FirIdentityRequestOptions
+): Promise<number> {
+  const parsed = (await readJsonInput({ file: opts.file, body: opts.body }, "identity-request")) ?? {};
+  const base = asRecord(parsed, "identity-request body");
+  const { sender, recipient } = resolveParties(base, opts.sender, opts.recipient);
+
+  // The base IdentityRequest may live under `identityRequest` (full request body)
+  // or be the top-level object (a bare IdentityRequest); flags override fields.
+  const irBase =
+    (base.identityRequest as Partial<FirIdentityRequest> | undefined) ??
+    (base.transactionRef ? (base as unknown as Partial<FirIdentityRequest>) : {});
+
+  const transactionRef = opts.transactionRef ?? irBase.transactionRef;
+  const aboutParty = (opts.aboutParty ?? irBase.aboutParty) as FirIdentityRequest["aboutParty"];
+  const legalBasis = buildLegalBasis(opts, irBase.legalBasis);
+  const paymentReference = opts.paymentReference ?? irBase.paymentReference;
+  const requestedAttributes =
+    opts.requestedAttribute && opts.requestedAttribute.length > 0
+      ? opts.requestedAttribute
+      : irBase.requestedAttributes;
+  const freeText = opts.freeText ?? irBase.freeText;
+
+  const identityRequest: FirIdentityRequest = {
+    transactionRef: transactionRef as string,
+    aboutParty,
+    legalBasis: legalBasis as FirLegalBasis,
+    ...(paymentReference ? { paymentReference } : {}),
+    ...(requestedAttributes && requestedAttributes.length > 0 ? { requestedAttributes } : {}),
+    ...(freeText ? { freeText } : {}),
+  };
+
+  const body: FirIdentityRequestRequest = {
+    sender: sender as FirInstitution,
+    recipient: recipient as FirInstitution,
+    identityRequest,
+  };
+
+  if (!opts.json) {
+    line(`Requesting identity on FIR case ${firId} (IDENTITY_REQUEST):`);
+    line(`  transaction: ${identityRequest.transactionRef ?? "(missing)"}`);
+    line(`  about:       ${identityRequest.aboutParty ?? "(missing)"}`);
+    if (legalBasis) {
+      const lbParts = [
+        legalBasis.token ? `token=${legalBasis.token}` : "",
+        legalBasis.scheme ? `scheme=${legalBasis.scheme}` : "",
+        legalBasis.reference ? `ref=${legalBasis.reference}` : "",
+        legalBasis.description ? `“${legalBasis.description}”` : "",
+      ].filter(Boolean);
+      line(`  legalBasis:  ${lbParts.join(" ") || "(empty)"}`);
+    } else {
+      line("  legalBasis:  (missing)");
+    }
+    if (requestedAttributes && requestedAttributes.length > 0) {
+      line(`  attributes:  ${requestedAttributes.join(", ")}`);
+    }
+    line("");
+  }
+  if (!(await confirmAction(opts, "Send this IDENTITY_REQUEST?"))) return 1;
+
+  const result = await performFirIdentityRequest(await clientFor(env), firId, body);
+  if (opts.json) {
+    printJson(result);
+    return 0;
+  }
+  line(`Identity requested on FIR case ${firId} — sealed dual-copy to both parties.`);
+  line("Verify:  qp fir show " + firId);
+  return 0;
+}
+
+// ── identity-respond (IDENTITY_RESPONSE) ──────────────────────────────────────
+
+export type FirIdentityRespondOptions = {
+  file?: string;
+  body?: string;
+  sender?: string;
+  recipient?: string;
+  recordStatus?: string;
+  transactionRef?: string;
+  aboutParty?: string;
+  payloadId?: string;
+  freeText?: string;
+  note?: string;
+  yes?: boolean;
+  json?: boolean;
+};
+
+/**
+ * Interpret the --file/--body for identity-respond, which may hold EITHER a bare
+ * identity subject ({naturalPerson}|{legalPerson}), a full IdentityResponse
+ * ({transactionRef, recordStatus, subject, …}), or a full request body carrying
+ * `identityResponse`. Returns the IdentityResponse base + a detected subject.
+ */
+function resolveIdentityResponseBase(base: Record<string, unknown>): {
+  irBase: Partial<FirIdentityResponse>;
+  subject?: FirIdentitySubject;
+} {
+  if (base.identityResponse && typeof base.identityResponse === "object") {
+    const ir = base.identityResponse as Partial<FirIdentityResponse>;
+    return { irBase: ir, subject: ir.subject };
+  }
+  if (base.naturalPerson || base.legalPerson) {
+    return {
+      irBase: {},
+      subject: {
+        ...(base.naturalPerson ? { naturalPerson: base.naturalPerson as never } : {}),
+        ...(base.legalPerson ? { legalPerson: base.legalPerson as never } : {}),
+      },
+    };
+  }
+  if (base.subject || base.transactionRef || base.recordStatus) {
+    const ir = base as unknown as Partial<FirIdentityResponse>;
+    return { irBase: ir, subject: ir.subject };
+  }
+  return { irBase: {} };
+}
+
+export async function runFirIdentityRespond(
+  env: ReqportEnv,
+  firId: string,
+  opts: FirIdentityRespondOptions
+): Promise<number> {
+  const parsed = (await readJsonInput({ file: opts.file, body: opts.body }, "identity-respond")) ?? {};
+  const base = asRecord(parsed, "identity-respond body");
+  const { sender, recipient } = resolveParties(base, opts.sender, opts.recipient);
+  const { irBase, subject } = resolveIdentityResponseBase(base);
+
+  const recordStatus = (opts.recordStatus ?? irBase.recordStatus) as FirIdentityResponse["recordStatus"];
+  const transactionRef = opts.transactionRef ?? irBase.transactionRef;
+  const aboutParty = (opts.aboutParty ?? irBase.aboutParty) as FirIdentityResponse["aboutParty"];
+  const freeText = opts.freeText ?? irBase.freeText;
+  const payloadId = opts.payloadId ?? (typeof base.payloadId === "string" ? base.payloadId : undefined);
+  const note = opts.note ?? (typeof base.note === "string" ? base.note : undefined);
+
+  const identityResponse: FirIdentityResponse = {
+    transactionRef: transactionRef as string,
+    recordStatus,
+    ...(aboutParty ? { aboutParty } : {}),
+    ...(subject ? { subject } : {}),
+    ...(freeText ? { freeText } : {}),
+  };
+
+  const body: FirIdentityResponseRequest = {
+    sender: sender as FirInstitution,
+    recipient: recipient as FirInstitution,
+    identityResponse,
+    ...(payloadId ? { payloadId } : {}),
+    ...(note ? { note } : {}),
+  };
+
+  if (!opts.json) {
+    line(`Returning identity on FIR case ${firId} (IDENTITY_RESPONSE, receiver → requester):`);
+    line(`  transaction:  ${identityResponse.transactionRef ?? "(missing)"}`);
+    line(`  recordStatus: ${identityResponse.recordStatus ?? "(missing)"}`);
+    const disclosure = subject
+      ? subject.naturalPerson
+        ? "inline naturalPerson"
+        : subject.legalPerson
+          ? "inline legalPerson"
+          : "inline subject"
+      : payloadId
+        ? `pre-sealed payloadId ${payloadId}`
+        : "(no subject)";
+    line(`  disclosure:   ${disclosure}`);
+    if (payloadId) {
+      line("  (carries a pre-sealed payload; your org's approval policy may hold it for review)");
+    }
+    line("");
+  }
+  if (!(await confirmAction(opts, "Submit this IDENTITY_RESPONSE?"))) return 1;
+
+  const result = await performFirIdentityRespond(await clientFor(env), firId, body);
+  if (opts.json) {
+    printJson(result);
+    return 0;
+  }
+  const status = result.status ?? "(ok)";
+  line(`Submitted IDENTITY_RESPONSE — status: ${status}`);
   if (status === "PENDING_APPROVAL") {
     line("  Held for human approval by your org's policy — release it with `qp pending approve <id>`.");
   }

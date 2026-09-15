@@ -117,14 +117,17 @@ has run.
 
 Beyond the single request→response families, `qp` drives **FIR** — a multi-message
 **FI-to-FI fraud case** between a **sending bank** and a **receiving institution**
-(a client-funds holder). One workflow instance (its id is the `firId`) carries four
-messages: **NOTICE → RESPONSE → REFUND_INSTRUCTION → REFUND_CONFIRMATION**.
+(a client-funds holder). One workflow instance (its id is the `firId`) carries the
+core messages **NOTICE → RESPONSE → REFUND_INSTRUCTION → REFUND_CONFIRMATION**, plus
+an **identity-exchange** step (**IDENTITY_REQUEST → IDENTITY_RESPONSE**).
 
 Roles decide who runs what:
 
 - **Sending bank**: `qp fir notify` (open the case) and `qp fir instruct-refund`.
 - **Receiver**: `qp fir respond` (one outcome per transaction) and
   `qp fir confirm-refund`.
+- **Identity-exchange**: either party may `qp fir identity-request` (ask who is
+  behind a counterparty); the counterparty runs `qp fir identity-respond`.
 
 Discovery reuses the responder loop: **there is no list-cases endpoint** — incoming
 cases surface through the same `/v1/affordances` discovery as `qp requests list`.
@@ -145,6 +148,15 @@ qp --env sandbox fir instruct-refund <firId> --file ./parties.json \
 
 # Receiver: confirm a refund (pre-sealed RefundExecution payload; may be held for approval)
 qp --env sandbox fir confirm-refund <firId> --file ./parties.json --payload-id <uuid> --yes
+
+# Either party: request the identity behind a fraud counterparty
+qp --env sandbox fir identity-request <firId> --file ./parties.json \
+  --transaction-ref t1 --about-party ORDER_CUSTOMER \
+  --legal-basis-scheme "SE-POLICE" --legal-basis-reference "DNR-2026-123" --yes
+
+# Counterparty receiver: return the identity (inline camelCase subject, or a pre-sealed payload)
+qp --env sandbox fir identity-respond <firId> --file ./identity-subject.json \
+  --record-status FOUND --transaction-ref t1 --yes
 ```
 
 Body notes: each write body carries the two institutions (`sender`/`recipient`, from
@@ -155,6 +167,17 @@ are camelCase** (`transactionRef`, `accountType`, `heldAmount`, `returnTo`, …)
 receiver `accountType` is constrained to `CLIENT_FUNDS | OMNIBUS | MERCHANT`. A
 `confirm-refund` may be **held** by your org's approval policy → work it with
 `qp pending …`.
+
+**Identity-exchange.** `identity-request` needs `--transaction-ref` and
+`--about-party` (`ORDER_CUSTOMER | ORIGINATOR`) plus a **legal basis** — a free-text
+`--legal-basis`, or structured `--legal-basis-token` / `--legal-basis-scheme` /
+`--legal-basis-reference`; **at least one legal-basis field is required** (the vanta
+gate, enforced client-side). `identity-respond` needs `--record-status`
+(`FOUND | NOT_FOUND`) and returns the **identity subject** — the same IVMS101
+`naturalPerson` / `legalPerson` core as KYC/CDD but **camelCase** here — either
+**inline** (via `--file`/`--body`, a subject or a full IdentityResponse) **or** as a
+pre-sealed `--payload-id` (required when your org gates identity disclosure; the call
+then returns `PENDING_APPROVAL`). Enums are validated client-side before the POST.
 
 ## KYC / CDD — Customer Due Diligence response
 
@@ -214,7 +237,8 @@ Tools: `reqport_doctor`, `reqport_list_requests`, `reqport_show_request`,
 `reqport_pending_withdraw`, `reqport_approval_policy_get`,
 `reqport_approval_policy_set`, the FIR tools `reqport_fir_list`,
 `reqport_fir_show`, `reqport_fir_notify`, `reqport_fir_respond`,
-`reqport_fir_instruct_refund`, `reqport_fir_confirm_refund`, and the KYC/CDD tools
+`reqport_fir_instruct_refund`, `reqport_fir_confirm_refund`,
+`reqport_fir_identity_request`, `reqport_fir_identity_respond`, and the KYC/CDD tools
 `reqport_kyc_list`, `reqport_kyc_show`, `reqport_kyc_respond` (bodies snake_case).
 Each accepts an optional `env`; the credential comes from the
 server process environment. The MCP server is **API-key-only** — `qp login` is a

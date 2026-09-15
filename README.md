@@ -90,6 +90,8 @@ The stored key lives at **`%APPDATA%\qp\credential.json`** (Windows) or
 | `qp fir respond <firId> --outcome …` | Answer a NOTICE with per-transaction outcomes (receiver side) |
 | `qp fir instruct-refund <firId> …` | Instruct a refund of a held transaction (bank side) |
 | `qp fir confirm-refund <firId> --payload-id <uuid>` | Confirm a refund executed (receiver side) |
+| `qp fir identity-request <firId> --transaction-ref … --about-party … --legal-basis …` | Request the identity behind a fraud counterparty (either side) |
+| `qp fir identity-respond <firId> --record-status FOUND\|NOT_FOUND …` | Return that identity (receiver side) — inline subject or a pre-sealed payload |
 | `qp kyc list [--state open] [--mine]` | Discover **KYC / CDD** checks addressed to you |
 | `qp kyc show <requestId>` | Content-blind read-back of a KYC/CDD response |
 | `qp kyc respond <requestId> --record-status FOUND\|NOT_FOUND …` | Answer a KYC/CDD request with the CDD record |
@@ -181,7 +183,7 @@ Endpoints (all under the env's Vanta base, auth = your `rqk_live_` key):
 A **FIR** is a multi-message **FI-to-FI fraud case** between a **sending bank** and
 a **receiving institution** (a client-funds holder such as an exchange). Unlike the
 single request→response families, a FIR case is one workflow instance (its id is the
-`firId`) that carries four P0 messages over time:
+`firId`) that carries the P0 messages plus an **identity-exchange** step over time:
 
 | Step | Command | Role | Endpoint |
 |------|---------|------|----------|
@@ -189,6 +191,8 @@ single request→response families, a FIR case is one workflow instance (its id 
 | **RESPONSE** | `qp fir respond <firId>` | **receiver** | `POST /v1/fir/cases/{firId}/response` |
 | **REFUND_INSTRUCTION** | `qp fir instruct-refund <firId>` | sending **bank** | `POST /v1/fir/cases/{firId}/refund-instruction` |
 | **REFUND_CONFIRMATION** | `qp fir confirm-refund <firId>` | **receiver** | `POST /v1/fir/cases/{firId}/refund-confirmation` |
+| **IDENTITY_REQUEST** | `qp fir identity-request <firId>` | either party | `POST /v1/fir/cases/{firId}/identity-request` |
+| **IDENTITY_RESPONSE** | `qp fir identity-respond <firId>` | counterparty **receiver** | `POST /v1/fir/cases/{firId}/identity-response` |
 | read a case | `qp fir show <firId>` | either party | `GET /v1/fir/cases/{firId}` |
 
 **Roles.** The **bank** opens the case (`notify`) and later authorises refunds
@@ -256,10 +260,54 @@ sensitive refund detail is never inlined. That lets the receiver's per-type
 the call returns `PENDING_APPROVAL` (release it with `qp pending approve <id>`);
 otherwise it releases immediately.
 
+### Identity-exchange (`identity-request` / `identity-response`)
+
+Once funds are held, a party may need the **identity behind a fraud-transaction
+counterparty** — the person or entity on the other side of a reported payment.
+That is a two-message exchange on the same case:
+
+```bash
+# EITHER PARTY: ask who is behind a transaction's counterparty
+qp fir identity-request <firId> --file ./parties.json \
+  --transaction-ref t1 --about-party ORDER_CUSTOMER \
+  --legal-basis-scheme "SE-POLICE" --legal-basis-reference "DNR-2026-123" \
+  --requested-attribute name --requested-attribute dateOfBirth
+#   --about-party is ORDER_CUSTOMER | ORIGINATOR (validated client-side)
+#   legal basis: a free-text --legal-basis, OR structured
+#   --legal-basis-token / --legal-basis-scheme / --legal-basis-reference —
+#   at least one field is REQUIRED (the vanta gate, mirrored client-side)
+
+# COUNTERPARTY RECEIVER: return the identity inline (the KYC/IVMS101 subject core)
+qp fir identity-respond <firId> --file ./identity-subject.json \
+  --record-status FOUND --transaction-ref t1
+#   identity-subject.json = {"naturalPerson":{"name":{"primary":"Andersson",
+#     "secondary":"Anna"},"dateOfBirth":"1985-04-02","nationality":"SE"}}
+#   (a legalPerson subject is the same shape as KYC's legal_person, camelCase)
+
+# …or return a pre-sealed identity document instead of inlining PII
+qp fir identity-respond <firId> --sender '{…}' --recipient '{…}' \
+  --record-status FOUND --transaction-ref t1 --payload-id <uuid>
+
+# …or decline: no counterparty on record
+qp fir identity-respond <firId> --sender '{…}' --recipient '{…}' \
+  --record-status NOT_FOUND --transaction-ref t1
+```
+
+The **identity subject** is the same IVMS101 identity core as
+[KYC / CDD](#kyc--cdd--customer-due-diligence-response) — `naturalPerson` OR
+`legalPerson` — but **camelCase** here (matching the FIR wire idiom), not KYC's
+snake_case. Supply it **inline** under `identityResponse.subject` (server-sealed
+per-party) **OR** as a pre-sealed `--payload-id` — the pre-sealed form is required
+when your org's [approval policy](#approval-human-in-the-loop) gates identity
+disclosure (no cleartext PII may be held); a gated call returns `PENDING_APPROVAL`.
+`--record-status` (`FOUND | NOT_FOUND`) and `--about-party` are validated
+client-side before the POST.
+
 The mutating FIR commands (`notify`, `respond`, `instruct-refund`,
-`confirm-refund`) prompt for confirmation on an interactive terminal; pass
-`-y`/`--yes` (or `--json`) to skip. Scopes: `notify` / `instruct-refund` need
-`workflows:write`; `respond` / `confirm-refund` ride the response path
+`confirm-refund`, `identity-request`, `identity-respond`) prompt for confirmation
+on an interactive terminal; pass `-y`/`--yes` (or `--json`) to skip. Scopes:
+`notify` / `instruct-refund` / `identity-request` need `workflows:write`;
+`respond` / `confirm-refund` / `identity-respond` ride the response path
 (`responses:write`); `show` / `list` need `workflows:read` / discovery.
 
 ## KYC / CDD — Customer Due Diligence response
@@ -385,7 +433,8 @@ Tools: `reqport_doctor`, `reqport_list_requests`, `reqport_show_request`,
 `reqport_pending_approve`, `reqport_pending_reject`, `reqport_pending_withdraw`,
 `reqport_approval_policy_get`, `reqport_approval_policy_set`, the **FIR** tools
 `reqport_fir_list`, `reqport_fir_show`, `reqport_fir_notify`, `reqport_fir_respond`,
-`reqport_fir_instruct_refund`, `reqport_fir_confirm_refund`, the **KYC / CDD** tools
+`reqport_fir_instruct_refund`, `reqport_fir_confirm_refund`,
+`reqport_fir_identity_request`, `reqport_fir_identity_respond`, the **KYC / CDD** tools
 `reqport_kyc_list`, `reqport_kyc_show`, `reqport_kyc_respond` (bodies snake_case),
 and the chat + attachment tools.
 
