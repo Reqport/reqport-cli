@@ -849,7 +849,7 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
     {
       title: "Open a FIR case (NOTICE)",
       description:
-        "Open a FIR case with a NOTICE (sending-bank side) via POST /v1/fir/cases. The bank reports one or more fraudulent inbound payments to the receiving institution and asks whether the funds can be held. Returns the fir_id (the case id) + the assembled NOTICE envelope. Needs scope workflows:write.",
+        "Open a FIR case with a NOTICE (sending-bank side) via POST /v1/fir/cases. The bank reports one or more fraudulent inbound payments to the receiving institution and asks whether the funds can be held. Returns the fir_id (the case id) + the assembled NOTICE envelope. Needs scope fir:write.",
       inputSchema: {
         env: envSchema,
         sender: firInstitutionSchema,
@@ -904,7 +904,7 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
     {
       title: "Instruct a FIR refund",
       description:
-        "Instruct a refund of a held transaction (bank side) via POST /v1/fir/cases/{firId}/refund-instruction: the return account, reference text, and a verification challenge. Sealed dual-copy to both parties. Needs scope workflows:write.",
+        "Instruct a refund of a held transaction (bank side) via POST /v1/fir/cases/{firId}/refund-instruction: the return account, reference text, and a verification challenge. Sealed dual-copy to both parties. Needs scope fir:write.",
       inputSchema: {
         env: envSchema,
         firId: z.string(),
@@ -963,7 +963,7 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
     {
       title: "Request a FIR counterparty's identity",
       description:
-        "Request the identity behind a fraud-transaction counterparty (either side) via POST /v1/fir/cases/{firId}/identity-request. aboutParty is ORDER_CUSTOMER | ORIGINATOR. legalBasis MUST carry at least one field (token, scheme, reference, or description) — the server gate is mirrored client-side. Sealed dual-copy to both parties. Needs scope workflows:write.",
+        "Request the identity behind a fraud-transaction counterparty (either side) via POST /v1/fir/cases/{firId}/identity-request. aboutParty is ORDER_CUSTOMER | ORIGINATOR. legalBasis MUST carry at least one field (token, scheme, reference, or description) — the server gate is mirrored client-side. Sealed dual-copy to both parties. Needs scope fir:write.",
       inputSchema: {
         env: envSchema,
         firId: z.string(),
