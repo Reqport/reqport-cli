@@ -1,19 +1,18 @@
 /**
- * `qp login` / `qp logout` / `qp whoami` / `qp use` — portal-pairing auth + the
- * active-env switch.
+ * `qp login` / `qp logout` / `qp whoami` — portal-pairing auth.
  *
  * `qp login` opens the Reqport console's CLI-auth page (which reuses the portal's
  * existing Signicat session — no new OAuth client, no device flow, no localhost
  * callback), the human approves, and the portal mints + relays an rqk_live_ key
  * back to the CLI. The key is stored as the active credential (and as a per-env
- * copy). `qp use <env>` switches which stored credential is active.
+ * copy). The active-env switch + listing live in `qp use` / `qp env` (use.ts).
  */
 
 import type { ReqportEnv } from "../env.js";
-import { isReqportEnv, maskKey } from "../env.js";
+import { credentialBaseUrl, maskKey } from "../env.js";
 import { isLoggedIn, logout, loginSummary } from "../auth/session.js";
 import { DEFAULT_PORTAL_URL, runPairing } from "../auth/pairing.js";
-import { activateEnv, listStoredEnvs, saveCredential } from "../auth/store.js";
+import { saveCredential } from "../auth/store.js";
 import { err, line, printJson } from "../ui.js";
 
 function resolvePortalUrl(flag?: string): string {
@@ -41,6 +40,11 @@ export async function runLogin(opts: {
     value: result.apiKey,
     kind: "apikey",
     env,
+    // Newer portals return the actual minted-against vanta URL + an estate label;
+    // persist them so the CLI targets the right vanta without guessing (and be
+    // tolerant of older portals that omit them).
+    ...(result.vantaBaseUrl ? { baseUrl: result.vantaBaseUrl } : {}),
+    ...(result.envLabel ? { label: result.envLabel } : {}),
     keyId: result.keyId,
     scopes: result.scopes,
     expiresAt: result.expiresAt ?? null,
@@ -48,10 +52,14 @@ export async function runLogin(opts: {
     savedAt: Date.now(),
   });
 
+  const baseUrl = credentialBaseUrl({ env, baseUrl: result.vantaBaseUrl });
+
   if (opts.json) {
     printJson({
       ok: true,
       env,
+      envLabel: result.envLabel ?? null,
+      baseUrl,
       keyId: result.keyId ?? null,
       scopes: result.scopes ?? [],
       expiresAt: result.expiresAt ?? null,
@@ -60,7 +68,8 @@ export async function runLogin(opts: {
   } else {
     line("");
     line(`Paired with ${portalUrl} — key stored as the active credential.`);
-    line(`  env:     ${env}`);
+    line(`  env:     ${env}${result.envLabel ? ` (${result.envLabel})` : ""}`);
+    line(`  base URL: ${baseUrl}`);
     if (result.keyId) line(`  key id:  ${result.keyId}`);
     if (result.scopes?.length) line(`  scopes:  ${result.scopes.join(", ")}`);
     if (result.expiresAt) line(`  expires: ${result.expiresAt}`);
@@ -86,62 +95,12 @@ export function runWhoami(json: boolean): number {
     line("Not logged in. Run `qp login` (or set REQPORT_API_KEY for automation).");
   } else {
     line(`Logged in (paired key)`);
-    line(`  env:     ${summary.env}`);
-    line(`  key id:  ${summary.keyId ?? "(unknown)"}`);
-    line(`  scopes:  ${(summary.scopes as string[]).join(", ") || "(none reported)"}`);
-    if (summary.expiresAt) line(`  expires: ${summary.expiresAt}`);
-    if (summary.portalUrl) line(`  portal:  ${summary.portalUrl}`);
+    line(`  env:      ${summary.env}${summary.label ? ` (${summary.label})` : ""}`);
+    line(`  base URL: ${summary.baseUrl}`);
+    line(`  key id:   ${summary.keyId ?? "(unknown)"}`);
+    line(`  scopes:   ${(summary.scopes as string[]).join(", ") || "(none reported)"}`);
+    if (summary.expiresAt) line(`  expires:  ${summary.expiresAt}`);
+    if (summary.portalUrl) line(`  portal:   ${summary.portalUrl}`);
   }
   return isLoggedIn() ? 0 : 1;
-}
-
-/**
- * `qp use [env]` — switch the active env among stored credentials, or (with no
- * arg) print the current active env + key id + login identity.
- */
-export function runUse(envArg: string | undefined, json: boolean): number {
-  const stored = listStoredEnvs();
-
-  // No arg → report the current active env (same info as whoami, plus the pool).
-  if (envArg === undefined || envArg === "") {
-    const summary = loginSummary();
-    if (json) {
-      printJson({ activeEnv: summary.loggedIn ? summary.env : null, storedEnvs: stored, login: summary });
-      return summary.loggedIn ? 0 : 1;
-    }
-    if (!summary.loggedIn) {
-      line("No active credential. Run `qp login` (or `qp login --env <env>`).");
-      return 1;
-    }
-    line(`Active env: ${summary.env}`);
-    line(`  key id:  ${summary.keyId ?? "(unknown)"}`);
-    if (summary.portalUrl) line(`  portal:  ${summary.portalUrl}`);
-    line(`  stored:  ${stored.join(", ") || "(none)"}`);
-    return 0;
-  }
-
-  if (!isReqportEnv(envArg)) {
-    err(`Unknown env "${envArg}". Expected one of: sandbox, uat, prod.`);
-    return 1;
-  }
-
-  const cred = activateEnv(envArg);
-  if (!cred) {
-    if (json) {
-      printJson({ ok: false, env: envArg, reason: "no_credential", storedEnvs: stored });
-    } else {
-      line(`No stored credential for "${envArg}". Run \`qp login --env ${envArg}\` first.`);
-      if (stored.length) line(`  stored envs: ${stored.join(", ")}`);
-    }
-    return 1;
-  }
-
-  if (json) {
-    printJson({ ok: true, activeEnv: cred.env, keyId: cred.keyId ?? null, scopes: cred.scopes ?? [] });
-  } else {
-    line(`Active env is now ${cred.env}.`);
-    line(`  key id:  ${cred.keyId ?? "(unknown)"}`);
-    line(`  scopes:  ${(cred.scopes ?? []).join(", ") || "(none reported)"}`);
-  }
-  return 0;
 }

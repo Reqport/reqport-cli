@@ -8,7 +8,7 @@
  */
 
 import type { Credential } from "../client.js";
-import { readApiKey } from "../env.js";
+import { credentialBaseUrl, readApiKey } from "../env.js";
 import { clearCredential, loadCredential } from "./store.js";
 
 export function isLoggedIn(): boolean {
@@ -50,6 +50,8 @@ export function loginSummary(): Record<string, unknown> {
   return {
     loggedIn: true,
     env: c.env,
+    label: c.label ?? null,
+    baseUrl: credentialBaseUrl(c),
     keyId: c.keyId ?? null,
     scopes: c.scopes ?? [],
     expiresAt: c.expiresAt ?? null,

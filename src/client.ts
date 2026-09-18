@@ -16,7 +16,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { baseUrlFor, type ReqportEnv } from "./env.js";
+import { resolveBaseUrl, type ReqportEnv } from "./env.js";
 import type {
   AffordanceListResponse,
   AttachmentCreate,
@@ -62,6 +62,13 @@ export type ReqportClientOptions = {
   env: ReqportEnv;
   /** Bearer credential. Optional: attestation is (nominally) unauthenticated. */
   credential?: Credential;
+  /**
+   * Explicit base URL override (rarely needed). When omitted, the client
+   * resolves the target vanta URL via {@link resolveBaseUrl} for `env` —
+   * REQPORT_BASE_URL > the stored credential's own baseUrl > the static map — so
+   * commands hit the exact env the active/selected key was minted for.
+   */
+  baseUrl?: string;
 };
 
 /** A structured API error carrying the HTTP status and any server error body. */
@@ -85,7 +92,7 @@ export class ReqportClient {
 
   constructor(opts: ReqportClientOptions) {
     this.env = opts.env;
-    this.baseUrl = baseUrlFor(opts.env);
+    this.baseUrl = opts.baseUrl ?? resolveBaseUrl(opts.env);
     this.credential = opts.credential;
   }
 

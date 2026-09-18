@@ -28,8 +28,21 @@ export type StoredCredential = {
   /** The rqk_live_ API key relayed from the portal. */
   value: string;
   kind: "apikey";
-  /** Environment the key was minted for (sandbox | uat | prod). */
+  /** Environment the key was minted for (sandbox | uat | prod | …). */
   env: string;
+  /**
+   * The vanta base URL this key was minted against (from the pairing response's
+   * `vantaBaseUrl`). When present, the CLI targets THIS url rather than guessing
+   * from the static env→URL map — a credential knows its own home. Absent for
+   * credentials written by an older CLI (they fall back to the static map).
+   */
+  baseUrl?: string;
+  /**
+   * An estate-aware display label for the env (from the pairing response's
+   * `envLabel`), e.g. a customer-specific name for a sandbox estate. Display
+   * only — `env` remains the selector key for `qp use` / per-env files.
+   */
+  label?: string;
   keyId?: string;
   scopes?: string[];
   /** ISO expiry (or null/absent for non-expiring). */
@@ -80,6 +93,34 @@ export function loadCredentialFor(env: string): StoredCredential | undefined {
   if (perEnv) return perEnv;
   const active = loadCredential();
   if (active && active.env === env) return active;
+  return undefined;
+}
+
+/**
+ * Every stored credential on this machine (active + per-env copies), one per
+ * env, sorted by env. Powers the az-cli-style `qp env` listing.
+ */
+export function listStoredCredentials(): StoredCredential[] {
+  const out: StoredCredential[] = [];
+  for (const env of listStoredEnvs()) {
+    const cred = loadCredentialFor(env);
+    if (cred) out.push(cred);
+  }
+  return out;
+}
+
+/**
+ * Resolve a `qp use <selector>` argument to the env key of a stored credential.
+ * Matches by env first (the canonical selector), then by the display `label`,
+ * so a credential paired with an estate-aware envLabel is also switchable by
+ * that name. Returns undefined when nothing matches.
+ */
+export function resolveStoredSelector(selector: string): string | undefined {
+  const byEnv = loadCredentialFor(selector);
+  if (byEnv) return byEnv.env;
+  for (const cred of listStoredCredentials()) {
+    if (cred.label && cred.label === selector) return cred.env;
+  }
   return undefined;
 }
 
