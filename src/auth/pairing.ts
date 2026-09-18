@@ -22,6 +22,17 @@ export type PairingResult = {
   apiKey: string;
   keyId?: string;
   env?: string;
+  /**
+   * An estate-aware display label for the env (newer portals). Falls back to
+   * undefined for older portals that don't return it.
+   */
+  envLabel?: string;
+  /**
+   * The vanta base URL the key was minted against (newer portals). When present
+   * the CLI stores + targets it directly, rather than guessing from the static
+   * env→URL map. Undefined for older portals.
+   */
+  vantaBaseUrl?: string;
   scopes?: string[];
   expiresAt?: string | null;
 };
@@ -135,6 +146,8 @@ async function pollOnce(
       apiKey?: string;
       keyId?: string;
       env?: string;
+      envLabel?: string;
+      vantaBaseUrl?: string;
       scopes?: string[];
       expiresAt?: string | null;
     };
@@ -145,6 +158,10 @@ async function pollOnce(
       apiKey: body.apiKey,
       keyId: body.keyId,
       env: body.env,
+      // Newer portals return an estate-aware label + the actual minted-against
+      // vanta URL; tolerate their absence for older portals.
+      envLabel: body.envLabel,
+      vantaBaseUrl: body.vantaBaseUrl,
       scopes: body.scopes,
       expiresAt: body.expiresAt ?? null,
     };

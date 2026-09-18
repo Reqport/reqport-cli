@@ -4,7 +4,8 @@
  *
  * Auth for automation: REQPORT_API_KEY (rqk_live_...) from the environment.
  * Auth for humans: `qp login` (Signicat, browser). Key is never a flag / logged.
- * Target environment via --env sandbox|uat|prod (default sandbox / REQPORT_ENV).
+ * Target environment via --env sandbox|uat|prod|dev-uat-sandbox (default sandbox
+ * / REQPORT_ENV). `qp use <env>` switches the active stored login; `qp env` lists.
  */
 
 import { Command } from "commander";
@@ -24,7 +25,7 @@ async function main(): Promise<void> {
         "Content is decrypted server-side in the TEE — no client crypto needed."
     )
     .version(VERSION)
-    .option("-e, --env <env>", "target environment: sandbox | uat | prod", process.env.REQPORT_ENV)
+    .option("-e, --env <env>", "target environment: sandbox | uat | prod | dev-uat-sandbox", process.env.REQPORT_ENV)
     .option("--json", "machine-readable JSON output", false)
     .showHelpAfterError();
 
@@ -81,13 +82,22 @@ async function main(): Promise<void> {
     );
 
   program
-    .command("use [env]")
-    .alias("env")
-    .description("Switch the active env among stored logins (sandbox | uat | prod); no arg shows the current one")
+    .command("use <env>")
+    .description("Switch the active env to a stored login (like `az account set`), by env or label")
     .action((env) =>
       wrap(async () => {
-        const { runUse } = await import("./commands/login.js");
-        return runUse(env as string | undefined, globalJson());
+        const { runUse } = await import("./commands/use.js");
+        return runUse(env as string, globalJson());
+      })()
+    );
+
+  program
+    .command("env")
+    .description("List environments — stored logins (base URL, key, scopes; active marked) + static envs to log into (like `az account list`)")
+    .action(() =>
+      wrap(async () => {
+        const { runEnv } = await import("./commands/use.js");
+        return runEnv(globalJson());
       })()
     );
 
