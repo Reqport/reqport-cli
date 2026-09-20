@@ -7,6 +7,7 @@ import { type ReqportEnv } from "../env.js";
 import { requireResponderCredential } from "../auth/session.js";
 import { isBusinessRelationship, isTransactionHistory, readRequest } from "../core.js";
 import { line, printJson, table } from "../ui.js";
+import type { DirectKycRequest, DirectTransactionHistoryRequest } from "../types.js";
 
 export async function runList(
   env: ReqportEnv,
@@ -47,6 +48,127 @@ export async function runList(
   line(table(["REQUEST ID", "TYPE", "STATE", "CREATED"], rows));
   line("");
   line(`${res.total} request(s). Read one:  qp requests show <REQUEST ID>`);
+  return 0;
+}
+
+/** One of --responder-org / --responder is required. Returns the locator pair. */
+function responderLocator(opts: {
+  responder?: string;
+  responderOrg?: string;
+}): { responderDomain?: string; responderOrgId?: string } {
+  if (opts.responder && opts.responderOrg) {
+    throw new Error("provide only one of --responder (domain) or --responder-org (org id).");
+  }
+  if (!opts.responder && !opts.responderOrg) {
+    throw new Error("a responder is required: --responder <domain> or --responder-org <orgId>.");
+  }
+  return opts.responder
+    ? { responderDomain: opts.responder }
+    : { responderOrgId: opts.responderOrg };
+}
+
+/**
+ * `qp requests create tx-history` — an identifier-first transaction-history
+ * request: the authority already holds the wallet and asks a known-holder
+ * responder directly, with no preceding business-relationship check.
+ */
+export async function runCreateTxHistory(
+  env: ReqportEnv,
+  opts: {
+    responder?: string;
+    responderOrg?: string;
+    wallet?: string;
+    scheme?: string;
+    instrumentType?: string;
+    from?: string;
+    to?: string;
+    case?: string;
+    legalBasis?: string;
+    message?: string;
+    personnummer?: string;
+    orgnr?: string;
+    json?: boolean;
+  }
+): Promise<number> {
+  if (!opts.wallet) throw new Error("--wallet <identifier> is required (the wallet/account you already hold).");
+  if (!opts.from || !opts.to) throw new Error("--from and --to (yyyy-mm-dd) are required.");
+  if (!opts.case) throw new Error("--case <invstgtnId> is required.");
+  if (!opts.legalBasis) throw new Error("--legal-basis <mandate> is required.");
+
+  const body: DirectTransactionHistoryRequest = {
+    ...responderLocator(opts),
+    instrumentType: opts.instrumentType,
+    identifier: opts.wallet,
+    scheme: opts.scheme,
+    from: opts.from,
+    to: opts.to,
+    invstgtnId: opts.case,
+    legalBasis: opts.legalBasis,
+    message: opts.message,
+    subjectPersonnummer: opts.personnummer,
+    subjectOrgNr: opts.orgnr,
+  };
+
+  const client = new ReqportClient({ env, credential: await requireResponderCredential() });
+  const res = await client.createDirectTransactionHistory(body);
+  if (opts.json) {
+    printJson(res);
+    return 0;
+  }
+  line(`Created transaction-history request ${res.requestId}`);
+  line(`  type:      ${res.workflowType ?? "TRANSACTION_HISTORY_CHECK_V1"}`);
+  if (res.status) line(`  status:    ${res.status}`);
+  if (res.responderOrgId) line(`  responder: ${res.responderOrgId}`);
+  line("");
+  line(`Track it:  qp requests show ${res.requestId}`);
+  return 0;
+}
+
+/**
+ * `qp requests create kyc` — an identifier-first KYC/CDD request on a subject,
+ * addressed directly to a known-holder responder, with no preceding BR check.
+ */
+export async function runCreateKyc(
+  env: ReqportEnv,
+  opts: {
+    responder?: string;
+    responderOrg?: string;
+    personnummer?: string;
+    orgnr?: string;
+    case?: string;
+    legalBasis?: string;
+    message?: string;
+    json?: boolean;
+  }
+): Promise<number> {
+  if (!opts.personnummer && !opts.orgnr)
+    throw new Error("one subject is required: --personnummer <pnr> or --orgnr <org.nr>.");
+  if (opts.personnummer && opts.orgnr)
+    throw new Error("provide only one of --personnummer or --orgnr.");
+  if (!opts.case) throw new Error("--case <invstgtnId> is required.");
+  if (!opts.legalBasis) throw new Error("--legal-basis <mandate> is required.");
+
+  const body: DirectKycRequest = {
+    ...responderLocator(opts),
+    subjectPersonnummer: opts.personnummer,
+    subjectOrgNr: opts.orgnr,
+    invstgtnId: opts.case,
+    legalBasis: opts.legalBasis,
+    message: opts.message,
+  };
+
+  const client = new ReqportClient({ env, credential: await requireResponderCredential() });
+  const res = await client.createDirectKyc(body);
+  if (opts.json) {
+    printJson(res);
+    return 0;
+  }
+  line(`Created KYC/CDD request ${res.requestId}`);
+  line(`  type:      ${res.workflowType ?? "KYC_CDD_CHECK_V1"}`);
+  if (res.status) line(`  status:    ${res.status}`);
+  if (res.responderOrgId) line(`  responder: ${res.responderOrgId}`);
+  line("");
+  line(`Track it:  qp requests show ${res.requestId}`);
   return 0;
 }
 

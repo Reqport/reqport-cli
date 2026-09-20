@@ -35,6 +35,18 @@ SETUP (responder, once)
    You       -> answer; the SAME gate applies.
    Typical: follow-ups are HELD for a human.
 
+ALTERNATE ENTRY — you ALREADY hold the identifier (start later in the flow)
+   When the authority already has a wallet/account (from another investigation,
+   a tip, a seized device), there is nothing to discover: skip the BR check and
+   ask a KNOWN holder directly. First-class request, no relatesTo.
+     qp requests create tx-history --responder <domain> --wallet <addr> \\
+         --from 2025-01-01 --to 2026-01-01 --case INV-9 --legal-basis "RB 27:1"
+     qp requests create kyc --responder <domain> --personnummer <pnr> \\
+         --case INV-9 --legal-basis "RB 27:1"
+   (API: POST /v1/requests/transaction-history | /v1/requests/kyc.) The responder
+   answers it exactly as a follow-up, and the SAME ruleset/approval gate applies.
+   Unknown holder (which company holds this wallet?) is holder-discovery — separate.
+
 HUMAN-IN-THE-LOOP
   qp pending list                 see held answers awaiting approval
   qp pending approve <id>         release (sealed + sent on approval)
