@@ -7,7 +7,11 @@ import { type ReqportEnv } from "../env.js";
 import { requireResponderCredential } from "../auth/session.js";
 import { isBusinessRelationship, isTransactionHistory, readRequest } from "../core.js";
 import { line, printJson, table } from "../ui.js";
-import type { DirectKycRequest, DirectTransactionHistoryRequest } from "../types.js";
+import type {
+  DirectInformationRequest,
+  DirectKycRequest,
+  DirectTransactionHistoryRequest,
+} from "../types.js";
 
 export async function runList(
   env: ReqportEnv,
@@ -165,6 +169,53 @@ export async function runCreateKyc(
   }
   line(`Created KYC/CDD request ${res.requestId}`);
   line(`  type:      ${res.workflowType ?? "KYC_CDD_CHECK_V1"}`);
+  if (res.status) line(`  status:    ${res.status}`);
+  if (res.responderOrgId) line(`  responder: ${res.responderOrgId}`);
+  line("");
+  line(`Track it:  qp requests show ${res.requestId}`);
+  return 0;
+}
+
+/**
+ * `qp requests create information` — a free-text (unstructured) information
+ * request to a named responder, when a structured tx-history/KYC check isn't the
+ * right shape and the authority needs to ask in plain language.
+ */
+export async function runCreateInformation(
+  env: ReqportEnv,
+  opts: {
+    responder?: string;
+    responderOrg?: string;
+    request?: string;
+    case?: string;
+    legalBasis?: string;
+    personnummer?: string;
+    orgnr?: string;
+    json?: boolean;
+  }
+): Promise<number> {
+  if (!opts.request) throw new Error("--request <text> is required (the free-text ask).");
+  if (opts.personnummer && opts.orgnr) throw new Error("provide only one of --personnummer or --orgnr.");
+  if (!opts.case) throw new Error("--case <invstgtnId> is required.");
+  if (!opts.legalBasis) throw new Error("--legal-basis <mandate> is required.");
+
+  const body: DirectInformationRequest = {
+    ...responderLocator(opts),
+    request: opts.request,
+    invstgtnId: opts.case,
+    legalBasis: opts.legalBasis,
+    subjectPersonnummer: opts.personnummer,
+    subjectOrgNr: opts.orgnr,
+  };
+
+  const client = new ReqportClient({ env, credential: await requireResponderCredential() });
+  const res = await client.createDirectInformation(body);
+  if (opts.json) {
+    printJson(res);
+    return 0;
+  }
+  line(`Created information request ${res.requestId}`);
+  line(`  type:      ${res.workflowType ?? "AUTHORITY_REQUEST_V1"}`);
   if (res.status) line(`  status:    ${res.status}`);
   if (res.responderOrgId) line(`  responder: ${res.responderOrgId}`);
   line("");

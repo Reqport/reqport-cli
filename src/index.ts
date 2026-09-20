@@ -201,6 +201,32 @@ async function main(): Promise<void> {
       })()
     );
 
+  requestsCreate
+    .command("information")
+    .description("Ask a known holder, in free text, for something beyond the structured checks")
+    .requiredOption("--request <text>", "the free-text ask")
+    .option("--responder <domain>", "responder by domain")
+    .option("--responder-org <orgId>", "responder by org id")
+    .requiredOption("--case <invstgtnId>", "investigation / case id")
+    .requiredOption("--legal-basis <mandate>", "legal mandate")
+    .option("--personnummer <pnr>", "optional subject personnummer (sealed)")
+    .option("--orgnr <orgNr>", "optional subject org.nr (sealed)")
+    .action((opts) =>
+      wrap(async () => {
+        const { runCreateInformation } = await import("./commands/requests.js");
+        return runCreateInformation(globalEnv(), {
+          responder: opts.responder,
+          responderOrg: opts.responderOrg,
+          request: opts.request,
+          case: opts.case,
+          legalBasis: opts.legalBasis,
+          personnummer: opts.personnummer,
+          orgnr: opts.orgnr,
+          json: globalJson(),
+        });
+      })()
+    );
+
   // ── respond ───────────────────────────────────────────────────────────────
   program
     .command("respond <id>")

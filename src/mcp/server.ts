@@ -361,6 +361,32 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
     }
   );
 
+  server.registerTool(
+    "reqport_create_information",
+    {
+      title: "Create a free-text information request (identifier-first)",
+      description:
+        "Ask a KNOWN-HOLDER responder, in FREE TEXT, for something that isn't a structured transaction-history or KYC check — with no preceding business-relationship check. POST /v1/requests/information; server-sealed in the TEE. The responder answers on the generic response path. Needs an authority key (scope authority:write). Give exactly one of responderDomain / responderOrgId.",
+      inputSchema: {
+        env: envSchema,
+        responderDomain: z.string().optional(),
+        responderOrgId: z.string().optional(),
+        request: z.string().describe("The free-text ask."),
+        invstgtnId: z.string().describe("Investigation / case id."),
+        legalBasis: z.string().describe("Legal mandate."),
+        subjectPersonnummer: z.string().optional().describe("Optional subject personnummer (sealed)."),
+        subjectOrgNr: z.string().optional().describe("Optional subject org.nr (sealed)."),
+      },
+    },
+    async ({ env, ...body }) => {
+      try {
+        return ok(await clientFor(env ?? defaultEnv).createDirectInformation(body));
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
   // ── Multi-org chat ─────────────────────────────────────────────────────────
 
   const targetSchema = z
