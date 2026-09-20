@@ -177,6 +177,21 @@ export type DirectKycRequest = {
   message?: string;
 };
 
+/**
+ * POST /v1/requests/information body — a free-text (unstructured) information
+ * request. Exactly one responder locator; `request` (the free-text ask),
+ * invstgtnId, and legalBasis required. Optional subject is sealed.
+ */
+export type DirectInformationRequest = {
+  responderOrgId?: string;
+  responderDomain?: string;
+  request: string; // the free-text ask
+  invstgtnId: string;
+  legalBasis: string;
+  subjectPersonnummer?: string;
+  subjectOrgNr?: string;
+};
+
 /** Result shape from the direct-create endpoints. */
 export type DirectCreateResult = {
   requestId?: string;

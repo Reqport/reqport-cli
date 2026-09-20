@@ -104,8 +104,9 @@ sequenceDiagram
     Note over AU,V: 2. Targeted follow-ups on the SAME case (relatesTo)
     AU->>V: POST /v1/requests/{brId}/transaction-history-followup (instrument + timespan)
     AU->>V: POST /v1/requests/{brId}/kyc-followup
+    AU->>V: POST /v1/requests/{brId}/information-followup (free-text ask)
     V->>CO: notify (follow-ups, same thread)
-    CO->>V: transaction-history / KYC response
+    CO->>V: transaction-history / KYC / free-text response
     alt HOLD_FOR_APPROVAL (typical for follow-ups)
         V-->>CO: 202 PENDING_APPROVAL (nothing sent yet)
         Note over AU: authority sees approvalState = PENDING_APPROVAL
@@ -129,6 +130,10 @@ Key points:
   you fetch `/states` (`qp org-states <orgId>`) once, to *author* the rules.
 - Follow-ups **link back via `relatesTo`** and share the case — data-minimised (one
   transaction-history request per disclosed instrument).
+- **Free-text follow-up:** a BR "true" (with or without the optional accounts) may
+  still not be enough — a **free-text information** request (`information-followup`,
+  or standalone `POST /v1/requests/information`) asks for more in plain language,
+  answered on the generic response path (`qp respond --status COMP --free-text`).
 - **Identifier-first entry:** when the authority *already* holds the identifier (a
   wallet from another investigation), it skips the BR check and asks a known holder
   directly (`POST /v1/requests/transaction-history` | `/kyc`, no `relatesTo`). You

@@ -34,6 +34,7 @@ import type {
   ChatView,
   DecryptBatchResponse,
   DirectCreateResult,
+  DirectInformationRequest,
   DirectKycRequest,
   DirectTransactionHistoryRequest,
   FirCaseView,
@@ -321,6 +322,21 @@ export class ReqportClient {
    */
   createDirectKyc(body: DirectKycRequest): Promise<DirectCreateResult> {
     return this.request<DirectCreateResult>(`/v1/requests/kyc`, {
+      method: "POST",
+      idempotent: true,
+      body: JSON.stringify(body),
+    });
+  }
+
+  /**
+   * POST /v1/requests/information — a first-class free-text (unstructured)
+   * information request to a named responder, with no preceding
+   * business-relationship check. For when a structured tx-history / KYC check
+   * isn't the right shape and the authority needs to ask in plain language. The
+   * responder answers on the generic response path. Scope authority:write.
+   */
+  createDirectInformation(body: DirectInformationRequest): Promise<DirectCreateResult> {
+    return this.request<DirectCreateResult>(`/v1/requests/information`, {
       method: "POST",
       idempotent: true,
       body: JSON.stringify(body),
