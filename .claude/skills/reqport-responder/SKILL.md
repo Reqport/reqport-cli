@@ -3,10 +3,10 @@ name: reqport-responder
 description: >
   Build and verify a Reqport responder integration end-to-end against the
   sandbox. Use when the task is to answer Reqport data requests — especially
-  Engagemangskontroll / business-relationship checks (ISO 20022 auth.002) — as
-  a data-holder company, using the `qp` CLI (@reqport/cli) and/or its bundled
-  MCP server. Triggers: "answer a Reqport request", "business relationship
-  check", "Engagemangskontroll", "reqport responder", "rqk_live key", "qp cli".
+  business-relationship (BR) checks (ISO 20022 auth.002) — as a data-holder
+  company, using the `qp` CLI (@reqport/cli) and/or its bundled MCP server.
+  Triggers: "answer a Reqport request", "business relationship check", "BR
+  check", "ARM", "reqport responder", "rqk_live key", "qp cli".
 ---
 
 # Reqport responder integration
@@ -64,6 +64,68 @@ has run.
 > `doctor` / `requests list` show zero, seeding may not have reached your org yet
 > — say so and continue against the documented contract rather than inventing data.
 
+## ARM — the full flow (Authority Request Management)
+
+ARM is the whole authority↔company exchange: a **BR check** ("do you hold this
+subject as a customer?"), and — if there is a relationship — **targeted follow-ups**
+(a transaction-history request per disclosed instrument, or a KYC/CDD file) on the
+**same case**. Whether each answer auto-releases or waits for a human is decided by
+**your org's rules**, not hard-coded.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor AU as Authority (requester)
+    participant V as Reqport / Vanta (TEE)
+    participant CO as Company (responder — you)
+    actor OP as Your approver (human)
+
+    Note over CO,V: SETUP (once) — you configure your trust rules
+    CO->>V: GET /v1/orgs/{authorityId}/states   (reference:read)
+    V-->>CO: {isAuthority, lawEnforcement, regulatoryClasses, country, ...}
+    CO->>V: PUT /v1/responses/requestor-ruleset   (ordered; first match wins)
+    Note right of V: e.g. {authority:true, country:SE} → AUTO_RELEASE<br/>{} (catch-all) → HOLD_FOR_APPROVAL
+    CO->>V: PUT /v1/responses/approval-policy   (per-type: which need approval)
+
+    Note over AU,V: 1. BR check
+    AU->>V: POST /v1/requests/business-relationship-check   (authority:write)
+    V->>CO: notify (request sealed to you)
+    CO->>V: read (decrypt-batch) → answer YES + accounts + relationshipTypes
+    Note right of V: evaluate ruleset (oracle-verified requestor status)<br/>verified authority → AUTO_RELEASE
+    V-->>AU: RESPONDED (approvalState = null → automatic)
+    AU->>V: read the disclosed accounts
+
+    Note over AU,V: 2. Targeted follow-ups on the SAME case (relatesTo)
+    AU->>V: POST /v1/requests/{brId}/transaction-history-followup (instrument + timespan)
+    AU->>V: POST /v1/requests/{brId}/kyc-followup
+    V->>CO: notify (follow-ups, same thread)
+    CO->>V: transaction-history / KYC response
+    alt HOLD_FOR_APPROVAL (typical for follow-ups)
+        V-->>CO: 202 PENDING_APPROVAL (nothing sent yet)
+        Note over AU: authority sees approvalState = PENDING_APPROVAL
+        OP->>V: POST /v1/responses/pending/{id}/approve → sealed + sent
+    else AUTO_RELEASE
+        Note right of V: sealed + sent immediately
+    else DECLINE
+        V-->>AU: RESPONSE_DECLINED (+ reason)
+    end
+    V-->>AU: follow-up RESPONDED (or DECLINED + reason)
+```
+
+Key points:
+
+- The **same approval gate** applies to every answer (BR + follow-ups): your
+  **requestor-status ruleset** (`qp requestor-ruleset`) is evaluated first — first
+  matching rule wins — then falls back to the **per-type approval policy**
+  (`qp approval-policy`). "BR auto, follow-ups need a human" is the *typical
+  configuration*, not a built-in rule.
+- **Requestor status is oracle-verified and matched server-side** at answer time;
+  you fetch `/states` (`qp org-states <orgId>`) once, to *author* the rules.
+- Follow-ups **link back via `relatesTo`** and share the case — data-minimised (one
+  transaction-history request per disclosed instrument).
+- Nothing reaches the authority until it is **released** (auto or human-approved);
+  a decline returns to the authority with a reason.
+
 ## The loop
 
 1. **Discover** open requests addressed to you:
@@ -104,10 +166,13 @@ has run.
    Valid values: `CUSTOMER`, `ACCOUNT_HOLDER`, `BENEFICIAL_OWNER`,
    `AUTHORISED_REPRESENTATIVE`, `COUNTERPARTY`, `FORMER_CUSTOMER`, `OTHER`.
 
-   If your org runs a **human-in-the-loop approval policy**, a submitted answer
-   may be *held* instead of sent. Manage the hold queue with
-   `qp pending list|approve|reject|withdraw` and the policy with
-   `qp approval-policy get|set <types|ALL>`.
+   If your org runs a **human-in-the-loop approval policy or requestor-status
+   ruleset**, a submitted answer may be *held* instead of sent (see the ARM flow
+   above). Manage the hold queue with `qp pending list|approve|reject|withdraw`,
+   the per-type policy with `qp approval-policy get|set <types|ALL>`, and the
+   status rules with `qp requestor-ruleset get|add|set|clear` (inspect a
+   requestor's verified status first with `qp org-states <orgId>`). And
+   `qp arm` prints this whole flow.
 
 4. **Verify**: re-run `qp requests show <REQUEST_ID>` and confirm the workflow
    moved to `RESPONDED` with outcome `NFOU` (false) or `NORMAL` (true). Add
