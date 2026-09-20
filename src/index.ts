@@ -254,6 +254,17 @@ async function main(): Promise<void> {
       })()
     );
 
+  // ── arm (print the Authority Request Management flow) ────────────────────────
+  program
+    .command("arm")
+    .description("Print the ARM flow — BR check + targeted follow-ups + where approvals happen")
+    .action(() =>
+      wrap(async () => {
+        const { runArm } = await import("./commands/arm.js");
+        return runArm();
+      })()
+    );
+
   // ── org-states (a requestor's verifiable status) ─────────────────────────────
   program
     .command("org-states <orgId>")
