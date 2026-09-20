@@ -144,6 +144,50 @@ export type ResponseSubmission = {
   accounts?: AccountInstrument[];
 };
 
+// ── Create (requester / authority side — identifier-first, no BR check) ─────
+
+/**
+ * POST /v1/requests/transaction-history body. The authority already holds the
+ * instrument and asks a known-holder responder directly. Exactly one responder
+ * locator (responderOrgId | responderDomain); identifier + from/to required.
+ */
+export type DirectTransactionHistoryRequest = {
+  responderOrgId?: string;
+  responderDomain?: string;
+  instrumentType?: string; // default WALLET
+  identifier: string; // the wallet/account the authority already has
+  scheme?: string; // e.g. BITCOIN / ETHEREUM / IBAN
+  from: string; // inclusive start, yyyy-mm-dd
+  to: string; // inclusive end, yyyy-mm-dd
+  invstgtnId: string;
+  legalBasis: string;
+  message?: string;
+  subjectPersonnummer?: string;
+  subjectOrgNr?: string;
+};
+
+/** POST /v1/requests/kyc body. Exactly one responder locator + one subject. */
+export type DirectKycRequest = {
+  responderOrgId?: string;
+  responderDomain?: string;
+  subjectPersonnummer?: string;
+  subjectOrgNr?: string;
+  invstgtnId: string;
+  legalBasis: string;
+  message?: string;
+};
+
+/** Result shape from the direct-create endpoints. */
+export type DirectCreateResult = {
+  requestId?: string;
+  workflowType?: string;
+  status?: string;
+  requesterOrgId?: string;
+  responderOrgId?: string;
+  createdAt?: string;
+  [k: string]: unknown;
+};
+
 /** Shared result shape from both responder endpoints. */
 export type ResponseResult = {
   messageId?: string;

@@ -132,6 +132,75 @@ async function main(): Promise<void> {
       })()
     );
 
+  // requests create — identifier-first (authority) requests, no BR check.
+  // For when you ALREADY hold the identifier (a wallet, an account) and start
+  // later in the flow, asking a known-holder responder directly.
+  const requestsCreate = requests
+    .command("create")
+    .description("Create a request when you already hold the identifier (no preceding BR check)");
+
+  requestsCreate
+    .command("tx-history")
+    .description("Ask a known holder for a wallet/account's transaction history (camt.053-CA)")
+    .requiredOption("--wallet <identifier>", "the wallet/account you already hold")
+    .option("--responder <domain>", "responder by domain (e.g. exchange.example)")
+    .option("--responder-org <orgId>", "responder by org id")
+    .option("--scheme <scheme>", "e.g. BITCOIN / ETHEREUM / IBAN")
+    .option("--instrument-type <type>", "instrument type (default WALLET)")
+    .requiredOption("--from <yyyy-mm-dd>", "inclusive start")
+    .requiredOption("--to <yyyy-mm-dd>", "inclusive end")
+    .requiredOption("--case <invstgtnId>", "investigation / case id")
+    .requiredOption("--legal-basis <mandate>", "legal mandate (e.g. RB 27:1)")
+    .option("--message <text>", "free-text note to the responder (sealed)")
+    .option("--personnummer <pnr>", "optional subject personnummer (sealed)")
+    .option("--orgnr <orgNr>", "optional subject org.nr (sealed)")
+    .action((opts) =>
+      wrap(async () => {
+        const { runCreateTxHistory } = await import("./commands/requests.js");
+        return runCreateTxHistory(globalEnv(), {
+          responder: opts.responder,
+          responderOrg: opts.responderOrg,
+          wallet: opts.wallet,
+          scheme: opts.scheme,
+          instrumentType: opts.instrumentType,
+          from: opts.from,
+          to: opts.to,
+          case: opts.case,
+          legalBasis: opts.legalBasis,
+          message: opts.message,
+          personnummer: opts.personnummer,
+          orgnr: opts.orgnr,
+          json: globalJson(),
+        });
+      })()
+    );
+
+  requestsCreate
+    .command("kyc")
+    .description("Ask a known holder for a KYC/CDD file on a subject (no preceding BR check)")
+    .option("--responder <domain>", "responder by domain")
+    .option("--responder-org <orgId>", "responder by org id")
+    .option("--personnummer <pnr>", "subject personnummer")
+    .option("--orgnr <orgNr>", "subject org.nr")
+    .requiredOption("--case <invstgtnId>", "investigation / case id")
+    .requiredOption("--legal-basis <mandate>", "legal mandate")
+    .option("--message <text>", "free-text note to the responder (sealed)")
+    .action((opts) =>
+      wrap(async () => {
+        const { runCreateKyc } = await import("./commands/requests.js");
+        return runCreateKyc(globalEnv(), {
+          responder: opts.responder,
+          responderOrg: opts.responderOrg,
+          personnummer: opts.personnummer,
+          orgnr: opts.orgnr,
+          case: opts.case,
+          legalBasis: opts.legalBasis,
+          message: opts.message,
+          json: globalJson(),
+        });
+      })()
+    );
+
   // ── respond ───────────────────────────────────────────────────────────────
   program
     .command("respond <id>")

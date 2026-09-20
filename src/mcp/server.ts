@@ -302,6 +302,65 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
     }
   );
 
+  // ── Create (requester / authority side — identifier-first, no BR check) ─────
+
+  server.registerTool(
+    "reqport_create_transaction_history",
+    {
+      title: "Create a transaction-history request (identifier-first)",
+      description:
+        "Ask a KNOWN-HOLDER responder for a wallet/account's transaction history, when you ALREADY hold the identifier and start later in the flow — no preceding business-relationship check. POST /v1/requests/transaction-history; server-sealed in the TEE (no client crypto). Needs an authority key (scope authority:write). Give exactly one of responderDomain / responderOrgId.",
+      inputSchema: {
+        env: envSchema,
+        responderDomain: z.string().optional().describe("Responder by domain, e.g. exchange.example."),
+        responderOrgId: z.string().optional().describe("Responder by org id."),
+        identifier: z.string().describe("The wallet/account you already hold."),
+        scheme: z.string().optional().describe("e.g. BITCOIN / ETHEREUM / IBAN."),
+        instrumentType: z.string().optional().describe("Instrument type (default WALLET)."),
+        from: z.string().describe("Inclusive start, yyyy-mm-dd."),
+        to: z.string().describe("Inclusive end, yyyy-mm-dd."),
+        invstgtnId: z.string().describe("Investigation / case id."),
+        legalBasis: z.string().describe("Legal mandate, e.g. RB 27:1."),
+        message: z.string().optional().describe("Free-text note to the responder (sealed)."),
+        subjectPersonnummer: z.string().optional().describe("Optional subject personnummer (sealed)."),
+        subjectOrgNr: z.string().optional().describe("Optional subject org.nr (sealed)."),
+      },
+    },
+    async ({ env, ...body }) => {
+      try {
+        return ok(await clientFor(env ?? defaultEnv).createDirectTransactionHistory(body));
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "reqport_create_kyc",
+    {
+      title: "Create a KYC/CDD request (identifier-first)",
+      description:
+        "Ask a KNOWN-HOLDER responder for a KYC/CDD file on a subject, with no preceding business-relationship check. POST /v1/requests/kyc; server-sealed in the TEE. Needs an authority key (scope authority:write). Give exactly one of responderDomain / responderOrgId and exactly one of subjectPersonnummer / subjectOrgNr.",
+      inputSchema: {
+        env: envSchema,
+        responderDomain: z.string().optional(),
+        responderOrgId: z.string().optional(),
+        subjectPersonnummer: z.string().optional(),
+        subjectOrgNr: z.string().optional(),
+        invstgtnId: z.string().describe("Investigation / case id."),
+        legalBasis: z.string().describe("Legal mandate."),
+        message: z.string().optional(),
+      },
+    },
+    async ({ env, ...body }) => {
+      try {
+        return ok(await clientFor(env ?? defaultEnv).createDirectKyc(body));
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
   // ── Multi-org chat ─────────────────────────────────────────────────────────
 
   const targetSchema = z

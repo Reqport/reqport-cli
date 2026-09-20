@@ -33,6 +33,9 @@ import type {
   ChatTarget,
   ChatView,
   DecryptBatchResponse,
+  DirectCreateResult,
+  DirectKycRequest,
+  DirectTransactionHistoryRequest,
   FirCaseView,
   FirCloseRequest,
   FirConfirmRefundRequest,
@@ -289,6 +292,39 @@ export class ReqportClient {
       `/v1/requests/${encodeURIComponent(id)}/business-relationship-response`,
       { method: "POST", idempotent: true, body: JSON.stringify(answer) }
     );
+  }
+
+  // ── Create (requester / authority side — identifier-first) ─────────────────
+
+  /**
+   * POST /v1/requests/transaction-history — a first-class transaction-history
+   * request for an instrument the authority ALREADY holds (e.g. a wallet from
+   * another investigation), addressed directly to a known-holder responder.
+   * No preceding business-relationship check, no relatesTo. Sealed server-side
+   * in the TEE; the wallet rides only in the sealed payload. Scope
+   * authority:write; the authority-only create gate is enforced in the engine.
+   */
+  createDirectTransactionHistory(
+    body: DirectTransactionHistoryRequest
+  ): Promise<DirectCreateResult> {
+    return this.request<DirectCreateResult>(`/v1/requests/transaction-history`, {
+      method: "POST",
+      idempotent: true,
+      body: JSON.stringify(body),
+    });
+  }
+
+  /**
+   * POST /v1/requests/kyc — a first-class KYC/CDD file request on a subject,
+   * addressed directly to a known-holder responder, with no preceding
+   * business-relationship check. Scope authority:write.
+   */
+  createDirectKyc(body: DirectKycRequest): Promise<DirectCreateResult> {
+    return this.request<DirectCreateResult>(`/v1/requests/kyc`, {
+      method: "POST",
+      idempotent: true,
+      body: JSON.stringify(body),
+    });
   }
 
   /**
