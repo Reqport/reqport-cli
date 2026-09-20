@@ -95,6 +95,12 @@ sequenceDiagram
     V-->>AU: RESPONDED (approvalState = null → automatic)
     AU->>V: read the disclosed accounts
 
+    opt ALT ENTRY — authority already holds the identifier (start here, no BR check)
+        AU->>V: POST /v1/requests/transaction-history (responder + wallet + timespan)
+        Note right of V: first-class request, no relatesTo;<br/>same sealing + same ruleset/approval gate
+        V->>CO: notify → you answer exactly as a follow-up
+    end
+
     Note over AU,V: 2. Targeted follow-ups on the SAME case (relatesTo)
     AU->>V: POST /v1/requests/{brId}/transaction-history-followup (instrument + timespan)
     AU->>V: POST /v1/requests/{brId}/kyc-followup
@@ -123,6 +129,11 @@ Key points:
   you fetch `/states` (`qp org-states <orgId>`) once, to *author* the rules.
 - Follow-ups **link back via `relatesTo`** and share the case — data-minimised (one
   transaction-history request per disclosed instrument).
+- **Identifier-first entry:** when the authority *already* holds the identifier (a
+  wallet from another investigation), it skips the BR check and asks a known holder
+  directly (`POST /v1/requests/transaction-history` | `/kyc`, no `relatesTo`). You
+  answer it identically, and the **same gate** applies. (Finding *which* company
+  holds an unknown wallet is holder-discovery — a separate capability.)
 - Nothing reaches the authority until it is **released** (auto or human-approved);
   a decline returns to the authority with a reason.
 
