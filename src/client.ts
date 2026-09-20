@@ -24,6 +24,9 @@ import type {
   AttachmentView,
   AttestationResponse,
   ApprovalPolicy,
+  OrgStates,
+  RequestorRuleset,
+  RulesetRule,
   BusinessRelationshipAnswer,
   ChatDetail,
   ChatMessageResult,
@@ -394,6 +397,39 @@ export class ReqportClient {
     return this.request<ApprovalPolicy>(`/v1/responses/approval-policy`, {
       method: "PUT",
       body: JSON.stringify({ responseTypes }),
+    });
+  }
+
+  /**
+   * GET /v1/orgs/{orgId}/states — a requestor org's verifiable status (authority,
+   * law-enforcement, regulated FI, regulatory classes, country) from the consortium
+   * oracles (scope reference:read). What a responder keys its requestor-status rules on.
+   */
+  getOrgStates(orgId: string): Promise<OrgStates> {
+    return this.request<OrgStates>(`/v1/orgs/${encodeURIComponent(orgId)}/states`, {
+      method: "GET",
+    });
+  }
+
+  /**
+   * GET /v1/responses/requestor-ruleset — this org's ordered auto-approve/hold/decline
+   * rules keyed on the requestor's status (scope responses:read).
+   */
+  getRequestorRuleset(): Promise<RequestorRuleset> {
+    return this.request<RequestorRuleset>(`/v1/responses/requestor-ruleset`, {
+      method: "GET",
+    });
+  }
+
+  /**
+   * PUT /v1/responses/requestor-ruleset — replace the full ordered ruleset (scope
+   * responses:write). Ordinals are assigned by list order; the FIRST matching predicate
+   * wins. An empty list clears the ruleset (all requests fall back to the per-type policy).
+   */
+  setRequestorRuleset(rules: RulesetRule[]): Promise<RequestorRuleset> {
+    return this.request<RequestorRuleset>(`/v1/responses/requestor-ruleset`, {
+      method: "PUT",
+      body: JSON.stringify({ rules }),
     });
   }
 

@@ -254,6 +254,69 @@ async function main(): Promise<void> {
       })()
     );
 
+  // ── org-states (a requestor's verifiable status) ─────────────────────────────
+  program
+    .command("org-states <orgId>")
+    .description("Show an org's verifiable status (authority / law-enforcement / regulated FI / country) — GET /v1/orgs/{orgId}/states")
+    .action((orgId) =>
+      wrap(async () => {
+        const { runOrgStates } = await import("./commands/orgStates.js");
+        return runOrgStates(globalEnv(), orgId, { json: globalJson() });
+      })()
+    );
+
+  // ── requestor-ruleset (auto-approve/hold/decline by requestor status) ────────
+  const ruleset = program
+    .command("requestor-ruleset")
+    .description("Auto-approve / hold / decline rules keyed on the requestor's status (evaluated in order; first match wins)");
+
+  ruleset
+    .command("get")
+    .description("Show this org's requestor-status ruleset (GET /v1/responses/requestor-ruleset)")
+    .action(() =>
+      wrap(async () => {
+        const { runRequestorRulesetGet } = await import("./commands/requestorRuleset.js");
+        return runRequestorRulesetGet(globalEnv(), { json: globalJson() });
+      })()
+    );
+
+  ruleset
+    .command("add")
+    .description("Append one rule (built from flags) to the end of the ruleset")
+    .requiredOption("--action <action>", "AUTO_RELEASE | HOLD_FOR_APPROVAL | DECLINE")
+    .option("--authority", "match requestors that ARE an authority")
+    .option("--not-authority", "match requestors that are NOT an authority")
+    .option("--regulated-fi", "match requestors that are a regulated financial institution")
+    .option("--country <iso>", "match requestor country (ISO code, e.g. SE)")
+    .option("--regulatory-class <class>", "match a single regulatory class (e.g. law_enforcement)")
+    .option("--regulatory-classes <list>", "match ANY of these regulatory classes (comma-separated)")
+    .action((opts) =>
+      wrap(async () => {
+        const { runRequestorRulesetAdd } = await import("./commands/requestorRuleset.js");
+        return runRequestorRulesetAdd(globalEnv(), { ...opts, json: globalJson() });
+      })()
+    );
+
+  ruleset
+    .command("set <json>")
+    .description("Replace the whole ruleset with a JSON rules array (or { rules: [...] })")
+    .action((json) =>
+      wrap(async () => {
+        const { runRequestorRulesetSet } = await import("./commands/requestorRuleset.js");
+        return runRequestorRulesetSet(globalEnv(), json, { json: globalJson() });
+      })()
+    );
+
+  ruleset
+    .command("clear")
+    .description("Remove all rules (every request falls back to the per-type approval policy)")
+    .action(() =>
+      wrap(async () => {
+        const { runRequestorRulesetClear } = await import("./commands/requestorRuleset.js");
+        return runRequestorRulesetClear(globalEnv(), { json: globalJson() });
+      })()
+    );
+
   // ── chat ────────────────────────────────────────────────────────────────
   const chat = program
     .command("chat")

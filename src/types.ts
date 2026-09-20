@@ -275,6 +275,50 @@ export type ApprovalPolicy = {
   [k: string]: unknown;
 };
 
+// ── Org states (a requestor's verifiable status) + requestor-status rulesets ──
+
+/**
+ * A requestor org's verifiable status, from the consortium oracles
+ * (GET /v1/orgs/{orgId}/states, scope reference:read). What a responder keys
+ * auto-approve/hold rules on.
+ */
+export type OrgStates = {
+  orgId: string;
+  isAuthority: boolean;
+  lawEnforcementAgency?: boolean | null;
+  isRegulatedFi: boolean;
+  regulatoryClasses?: string[];
+  country?: string | null;
+  status?: string | null;
+  [k: string]: unknown;
+};
+
+/** What a ruleset action does when its predicate matches the requestor. */
+export type RulesetAction = "AUTO_RELEASE" | "HOLD_FOR_APPROVAL" | "DECLINE";
+
+/**
+ * Match on the requestor's states. All present conditions must hold (AND); an
+ * empty predicate {} matches every requestor (a catch-all).
+ */
+export type RulesetPredicate = {
+  isAuthority?: boolean | null;
+  isRegulatedFi?: boolean | null;
+  country?: string | null;
+  regulatoryClass?: string | null;
+  regulatoryClasses?: string[] | null;
+};
+
+/** One rule as read back (ordinal assigned by the server) or submitted (ordinal ignored). */
+export type RulesetRule = {
+  ordinal?: number;
+  predicate: RulesetPredicate;
+  action: RulesetAction;
+};
+
+export type RequestorRuleset = {
+  rules: RulesetRule[];
+};
+
 // ── FIR — Fraud Incident Response ───────────────────────────────────────────
 
 /**
