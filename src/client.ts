@@ -23,7 +23,6 @@ import type {
   AttachmentDownload,
   AttachmentView,
   AttestationResponse,
-  ApprovalPolicy,
   OrgStates,
   RequestorRuleset,
   RulesetRule,
@@ -426,30 +425,6 @@ export class ReqportClient {
       `/v1/responses/pending/${encodeURIComponent(id)}/withdraw`,
       { method: "POST", idempotent: true }
     );
-  }
-
-  /**
-   * GET /v1/responses/approval-policy — which response types require approval
-   * before they are sealed + sent (scope responses:read).
-   */
-  getApprovalPolicy(): Promise<ApprovalPolicy> {
-    return this.request<ApprovalPolicy>(`/v1/responses/approval-policy`, {
-      method: "GET",
-    });
-  }
-
-  /**
-   * PUT /v1/responses/approval-policy — set the response types that require
-   * approval (scope responses:write). The sentinel "ALL" means every type.
-   *
-   * NOTE (unverified against server): body shape assumed to be
-   * {"responseTypes": [...]} — confirm against the PR #253 controller.
-   */
-  setApprovalPolicy(responseTypes: string[]): Promise<ApprovalPolicy> {
-    return this.request<ApprovalPolicy>(`/v1/responses/approval-policy`, {
-      method: "PUT",
-      body: JSON.stringify({ responseTypes }),
-    });
   }
 
   /**

@@ -324,31 +324,6 @@ async function main(): Promise<void> {
       })()
     );
 
-  // ── approval-policy ────────────────────────────────────────────────────────
-  const approvalPolicy = program
-    .command("approval-policy")
-    .description("Show / set which response types require approval before send");
-
-  approvalPolicy
-    .command("get")
-    .description("Show which response types require approval (GET /v1/responses/approval-policy)")
-    .action(() =>
-      wrap(async () => {
-        const { runApprovalPolicyGet } = await import("./commands/approvalPolicy.js");
-        return runApprovalPolicyGet(globalEnv(), { json: globalJson() });
-      })()
-    );
-
-  approvalPolicy
-    .command("set <types>")
-    .description("Set the response types that require approval — comma-separated, or the sentinel ALL")
-    .action((types) =>
-      wrap(async () => {
-        const { runApprovalPolicySet } = await import("./commands/approvalPolicy.js");
-        return runApprovalPolicySet(globalEnv(), types, { json: globalJson() });
-      })()
-    );
-
   // ── arm (print the Authority Request Management flow) ────────────────────────
   program
     .command("arm")
@@ -392,10 +367,12 @@ async function main(): Promise<void> {
     .requiredOption("--action <action>", "AUTO_RELEASE | HOLD_FOR_APPROVAL | DECLINE")
     .option("--authority", "match requestors that ARE an authority")
     .option("--not-authority", "match requestors that are NOT an authority")
+    .option("--law-enforcement", "match VERIFIED law-enforcement agencies")
     .option("--regulated-fi", "match requestors that are a regulated financial institution")
     .option("--country <iso>", "match requestor country (ISO code, e.g. SE)")
-    .option("--regulatory-class <class>", "match a single regulatory class (e.g. law_enforcement)")
+    .option("--regulatory-class <class>", "match a single regulatory class (e.g. credit_institution)")
     .option("--regulatory-classes <list>", "match ANY of these regulatory classes (comma-separated)")
+    .option("--response-types <list>", "apply only to these response types (comma-separated; omit = all): business-relationship-check, transaction-history, kyc, information")
     .action((opts) =>
       wrap(async () => {
         const { runRequestorRulesetAdd } = await import("./commands/requestorRuleset.js");
@@ -415,7 +392,7 @@ async function main(): Promise<void> {
 
   ruleset
     .command("clear")
-    .description("Remove all rules (every request falls back to the per-type approval policy)")
+    .description("Remove all rules (every outbound response is then held for approval by default)")
     .action(() =>
       wrap(async () => {
         const { runRequestorRulesetClear } = await import("./commands/requestorRuleset.js");

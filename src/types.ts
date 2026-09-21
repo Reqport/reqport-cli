@@ -325,15 +325,6 @@ export type PendingActionResult = {
   [k: string]: unknown;
 };
 
-/**
- * GET/PUT /v1/responses/approval-policy — which response types require approval
- * before they are sealed + sent. The sentinel "ALL" means every response type.
- */
-export type ApprovalPolicy = {
-  responseTypes?: string[];
-  [k: string]: unknown;
-};
-
 // ── Org states (a requestor's verifiable status) + requestor-status rulesets ──
 
 /**
@@ -361,10 +352,18 @@ export type RulesetAction = "AUTO_RELEASE" | "HOLD_FOR_APPROVAL" | "DECLINE";
  */
 export type RulesetPredicate = {
   isAuthority?: boolean | null;
+  lawEnforcementAgency?: boolean | null;
   isRegulatedFi?: boolean | null;
   country?: string | null;
   regulatoryClass?: string | null;
   regulatoryClasses?: string[] | null;
+  /**
+   * Which response/data types this rule applies to (empty/absent = ALL types).
+   * Slugs (vanta responseGatingSlug): business-relationship-check | transaction-history
+   * | kyc | information. Lets a rule say "auto-release BR checks from verified LEA
+   * but hold transaction-history".
+   */
+  responseTypes?: string[] | null;
 };
 
 /** One rule as read back (ordinal assigned by the server) or submitted (ordinal ignored). */
