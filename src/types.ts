@@ -359,8 +359,8 @@ export type RulesetPredicate = {
   regulatoryClasses?: string[] | null;
   /**
    * Which response/data types this rule applies to (empty/absent = ALL types).
-   * Slugs: business-relationship-check | transaction-history | kyc-response |
-   * account-information. Lets a rule say "auto-release BR checks from verified LEA
+   * Slugs (vanta responseGatingSlug): business-relationship-check | transaction-history
+   * | kyc | information. Lets a rule say "auto-release BR checks from verified LEA
    * but hold transaction-history".
    */
   responseTypes?: string[] | null;
