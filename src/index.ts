@@ -372,7 +372,7 @@ async function main(): Promise<void> {
     .option("--country <iso>", "match requestor country (ISO code, e.g. SE)")
     .option("--regulatory-class <class>", "match a single regulatory class (e.g. credit_institution)")
     .option("--regulatory-classes <list>", "match ANY of these regulatory classes (comma-separated)")
-    .option("--response-types <list>", "apply only to these response types (comma-separated; omit = all): business-relationship-check, transaction-history, kyc-response, account-information")
+    .option("--response-types <list>", "apply only to these response types (comma-separated; omit = all): business-relationship-check, transaction-history, kyc, information")
     .action((opts) =>
       wrap(async () => {
         const { runRequestorRulesetAdd } = await import("./commands/requestorRuleset.js");
