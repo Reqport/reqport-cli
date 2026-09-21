@@ -1,14 +1,16 @@
 /**
- * `qp requestor-ruleset …` — a responder org's ordered auto-approve / hold / decline
- * rules keyed on the REQUESTOR's verifiable status (GET/PUT /v1/responses/requestor-ruleset).
- * Rules are evaluated in order; the FIRST matching predicate wins. No match falls back to the
- * per-type approval policy (`qp approval-policy`). Check a requestor's status with `qp org-states`.
+ * `qp requestor-ruleset …` — OUTBOUND GATING. Every outbound response is HELD for human
+ * approval by DEFAULT. This ordered ruleset carves out the exceptions: rules keyed on the
+ * REQUESTOR's verifiable status AND the response type (GET/PUT /v1/responses/requestor-ruleset).
+ * Rules are evaluated in order; the FIRST matching rule wins; NO match → HOLD_FOR_APPROVAL.
+ * A new org comes pre-seeded with "auto-release BR checks from verified law-enforcement agencies".
+ * Check a requestor's status with `qp org-states`.
  *
  *   qp requestor-ruleset get
- *   qp requestor-ruleset add --action AUTO_RELEASE --authority --country SE --regulatory-class law_enforcement
- *   qp requestor-ruleset add --action HOLD_FOR_APPROVAL            # trailing catch-all: hold everything else
- *   qp requestor-ruleset set '<json rules array>'                  # replace the whole ruleset
- *   qp requestor-ruleset clear                                     # remove all rules
+ *   qp requestor-ruleset add --action AUTO_RELEASE --law-enforcement --country SE --response-types business-relationship-check
+ *   qp requestor-ruleset add --action DECLINE --not-authority       # e.g. refuse non-authorities
+ *   qp requestor-ruleset set '<json rules array>'                   # replace the whole ruleset
+ *   qp requestor-ruleset clear                                      # remove all rules (→ everything held)
  */
 
 import { ReqportClient } from "../client.js";
@@ -26,24 +28,28 @@ async function clientFor(env: ReqportEnv): Promise<ReqportClient> {
 function describePredicate(p: RulesetPredicate): string {
   const parts: string[] = [];
   if (p.isAuthority != null) parts.push(`authority=${p.isAuthority}`);
+  if (p.lawEnforcementAgency != null) parts.push(`lawEnforcement=${p.lawEnforcementAgency}`);
   if (p.isRegulatedFi != null) parts.push(`regulatedFi=${p.isRegulatedFi}`);
   if (p.country) parts.push(`country=${p.country}`);
   if (p.regulatoryClass) parts.push(`regulatoryClass=${p.regulatoryClass}`);
   if (p.regulatoryClasses?.length) parts.push(`regulatoryClasses=${p.regulatoryClasses.join("|")}`);
-  return parts.length ? parts.join(", ") : "{} (any requestor — catch-all)";
+  const status = parts.length ? parts.join(", ") : "any requestor";
+  const types = p.responseTypes?.length ? ` [types: ${p.responseTypes.join("|")}]` : " [all types]";
+  return status + types;
 }
 
 function renderRuleset(rs: RequestorRuleset): void {
   const rules = rs.rules ?? [];
+  line("Outbound gating: every response is HELD for approval unless a rule below releases it.");
   if (rules.length === 0) {
-    line("Requestor ruleset: empty — every request falls back to the per-type approval policy.");
+    line("Requestor ruleset: empty — every outbound response is held for approval.");
     return;
   }
-  line("Requestor ruleset (first matching rule wins):");
+  line("Rules (first matching rule wins):");
   rules.forEach((r, i) => {
     line(`  ${r.ordinal ?? i + 1}. IF ${describePredicate(r.predicate)}  →  ${r.action}`);
   });
-  line("  (no match → per-type approval policy; see `qp approval-policy`)");
+  line("  (no rule matches → HOLD_FOR_APPROVAL)");
 }
 
 export async function runRequestorRulesetGet(env: ReqportEnv, opts: { json?: boolean }): Promise<number> {
@@ -100,7 +106,7 @@ export async function runRequestorRulesetSet(
 export async function runRequestorRulesetClear(env: ReqportEnv, opts: { json?: boolean }): Promise<number> {
   const rs = await (await clientFor(env)).setRequestorRuleset([]);
   if (opts.json) { printJson(rs); return 0; }
-  line("Ruleset cleared — every request now falls back to the per-type approval policy.");
+  line("Ruleset cleared — every outbound response is now held for approval by default.");
   return 0;
 }
 
@@ -115,10 +121,12 @@ export async function runRequestorRulesetAdd(
     action?: string;
     authority?: boolean;
     notAuthority?: boolean;
+    lawEnforcement?: boolean;
     regulatedFi?: boolean;
     country?: string;
     regulatoryClass?: string;
     regulatoryClasses?: string;
+    responseTypes?: string;
     json?: boolean;
   }
 ): Promise<number> {
@@ -126,11 +134,15 @@ export async function runRequestorRulesetAdd(
   const predicate: RulesetPredicate = {};
   if (opts.authority) predicate.isAuthority = true;
   if (opts.notAuthority) predicate.isAuthority = false;
+  if (opts.lawEnforcement) predicate.lawEnforcementAgency = true;
   if (opts.regulatedFi) predicate.isRegulatedFi = true;
   if (opts.country) predicate.country = opts.country.trim().toUpperCase();
   if (opts.regulatoryClass) predicate.regulatoryClass = opts.regulatoryClass.trim();
   if (opts.regulatoryClasses) {
     predicate.regulatoryClasses = opts.regulatoryClasses.split(",").map((s) => s.trim()).filter(Boolean);
+  }
+  if (opts.responseTypes) {
+    predicate.responseTypes = opts.responseTypes.split(",").map((s) => s.trim()).filter(Boolean);
   }
 
   const client = await clientFor(env);

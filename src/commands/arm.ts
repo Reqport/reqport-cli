@@ -10,31 +10,36 @@ const ARM_TEXT = `ARM — Authority Request Management
 
 The full authority <-> company exchange: a business-relationship (BR) check, and —
 if there is a relationship — targeted follow-ups (transaction history per disclosed
-instrument, or a KYC/CDD file) on the SAME case. Whether each answer auto-releases
-or waits for a human is decided by YOUR org's rules, not hard-coded.
+instrument, or a KYC/CDD file) on the SAME case.
 
-SETUP (responder, once)
+OUTBOUND GATING — the core rule
+  EVERY outbound response is HELD for human approval BY DEFAULT ("when in doubt,
+  double-check"). One ordered rule engine — your requestor-status ruleset — carves out
+  the AUTO_RELEASE / DECLINE exceptions, keyed on the requestor's verifiable status AND
+  the response type. No rule matches -> HOLD. A new org comes PRE-SEEDED with a sensible
+  default: auto-release BR checks from verified law-enforcement agencies.
+
+SETUP (responder)
   qp org-states <authorityOrgId>          inspect a requestor's verified status
-  qp requestor-ruleset add|set|get|clear  auto-release / hold / decline by status
-  qp approval-policy get|set <types|ALL>   per-type: which answers need approval
-    Rules are evaluated in order, first match wins; no match falls back to the
-    per-type approval policy. Example ruleset:
-      1. IF authority=true, country=SE        -> AUTO_RELEASE
-      2. IF {} (any requestor, catch-all)     -> HOLD_FOR_APPROVAL
+  qp requestor-ruleset add|set|get|clear  the outbound-gating rules (first match wins)
+    Example ruleset (evaluated in order):
+      1. IF lawEnforcement=true, country=SE [types: business-relationship-check] -> AUTO_RELEASE
+      2. (no rule matches)                                                        -> HOLD
 
 1. BR CHECK
    Authority -> POST /v1/requests/business-relationship-check
    You       -> read (qp requests show), answer (qp respond --has-relationship ...)
                 YES discloses accounts (+ optional relationship types).
-   Vanta evaluates your ruleset on the requestor's oracle-verified status.
-   Typical: a verified authority auto-releases; the authority reads the accounts.
+   Vanta evaluates your outbound-gating rules on the requestor's oracle-verified status
+   + the response type. Pre-seeded default: a verified LEA's BR check auto-releases;
+   everything else is held.
 
 2. TARGETED FOLLOW-UPS (same case, linked via relatesTo)
    Authority -> POST /v1/requests/{brId}/transaction-history-followup (instrument + timespan)
    Authority -> POST /v1/requests/{brId}/kyc-followup
    Authority -> POST /v1/requests/{brId}/information-followup (free-text ask)
-   You       -> answer; the SAME gate applies.
-   Typical: follow-ups are HELD for a human.
+   You       -> answer; the SAME outbound gating applies.
+   Typical: follow-ups are HELD for a human (no rule releases them).
    A BR "true" (with or without the optional accounts) may still not be enough:
    the free-text INFORMATION follow-up asks for more in plain language, answered
    on the generic response path (qp respond --status COMP --free-text "...").
@@ -50,7 +55,7 @@ ALTERNATE ENTRY — you ALREADY hold the identifier (start later in the flow)
      qp requests create information --responder <domain> --request "..." \\
          --case INV-9 --legal-basis "RB 27:1"
    (API: POST /v1/requests/transaction-history | /v1/requests/kyc | /v1/requests/information.)
-   The responder answers it exactly as a follow-up, and the SAME ruleset/approval gate applies.
+   The responder answers it exactly as a follow-up, and the SAME outbound gating applies.
    Unknown holder (which company holds this wallet?) is holder-discovery — separate.
 
 HUMAN-IN-THE-LOOP

@@ -80,24 +80,23 @@ sequenceDiagram
     participant CO as Company (responder — you)
     actor OP as Your approver (human)
 
-    Note over CO,V: SETUP (once) — you configure your trust rules
+    Note over CO,V: SETUP — outbound gating: everything held unless a rule releases it
     CO->>V: GET /v1/orgs/{authorityId}/states   (reference:read)
     V-->>CO: {isAuthority, lawEnforcement, regulatoryClasses, country, ...}
-    CO->>V: PUT /v1/responses/requestor-ruleset   (ordered; first match wins)
-    Note right of V: e.g. {authority:true, country:SE} → AUTO_RELEASE<br/>{} (catch-all) → HOLD_FOR_APPROVAL
-    CO->>V: PUT /v1/responses/approval-policy   (per-type: which need approval)
+    CO->>V: PUT /v1/responses/requestor-ruleset   (ordered; first match wins; else HOLD)
+    Note right of V: pre-seeded default:<br/>{lawEnforcementAgency:true, responseTypes:[business-relationship-check]} → AUTO_RELEASE<br/>no rule matches → HOLD_FOR_APPROVAL
 
     Note over AU,V: 1. BR check
     AU->>V: POST /v1/requests/business-relationship-check   (authority:write)
     V->>CO: notify (request sealed to you)
     CO->>V: read (decrypt-batch) → answer YES + accounts + relationshipTypes
-    Note right of V: evaluate ruleset (oracle-verified requestor status)<br/>verified authority → AUTO_RELEASE
+    Note right of V: evaluate rules (requestor status + response type)<br/>verified LEA BR check → AUTO_RELEASE
     V-->>AU: RESPONDED (approvalState = null → automatic)
     AU->>V: read the disclosed accounts
 
     opt ALT ENTRY — authority already holds the identifier (start here, no BR check)
         AU->>V: POST /v1/requests/transaction-history (responder + wallet + timespan)
-        Note right of V: first-class request, no relatesTo;<br/>same sealing + same ruleset/approval gate
+        Note right of V: first-class request, no relatesTo;<br/>same sealing + same outbound gating
         V->>CO: notify → you answer exactly as a follow-up
     end
 
@@ -121,13 +120,14 @@ sequenceDiagram
 
 Key points:
 
-- The **same approval gate** applies to every answer (BR + follow-ups): your
-  **requestor-status ruleset** (`qp requestor-ruleset`) is evaluated first — first
-  matching rule wins — then falls back to the **per-type approval policy**
-  (`qp approval-policy`). "BR auto, follow-ups need a human" is the *typical
-  configuration*, not a built-in rule.
-- **Requestor status is oracle-verified and matched server-side** at answer time;
-  you fetch `/states` (`qp org-states <orgId>`) once, to *author* the rules.
+- **Outbound gating:** EVERY outbound response is held for human approval by
+  default. Your **requestor-status ruleset** (`qp requestor-ruleset`) carves out the
+  exceptions — an ordered set of rules keyed on the requestor's verified status AND
+  the response type; first match wins; no match → **HOLD**. A new org is pre-seeded
+  with *auto-release BR checks from verified law-enforcement agencies*; edit freely.
+- **Requestor status is oracle-verified and matched server-side** at answer time
+  (together with the response type); you fetch `/states` (`qp org-states <orgId>`)
+  once, to *author* the rules.
 - Follow-ups **link back via `relatesTo`** and share the case — data-minimised (one
   transaction-history request per disclosed instrument).
 - **Free-text follow-up:** a BR "true" (with or without the optional accounts) may
@@ -137,7 +137,7 @@ Key points:
 - **Identifier-first entry:** when the authority *already* holds the identifier (a
   wallet from another investigation), it skips the BR check and asks a known holder
   directly (`POST /v1/requests/transaction-history` | `/kyc`, no `relatesTo`). You
-  answer it identically, and the **same gate** applies. (Finding *which* company
+  answer it identically, and the **same outbound gating** applies. (Finding *which* company
   holds an unknown wallet is holder-discovery — a separate capability.)
 - Nothing reaches the authority until it is **released** (auto or human-approved);
   a decline returns to the authority with a reason.
@@ -182,13 +182,11 @@ Key points:
    Valid values: `CUSTOMER`, `ACCOUNT_HOLDER`, `BENEFICIAL_OWNER`,
    `AUTHORISED_REPRESENTATIVE`, `COUNTERPARTY`, `FORMER_CUSTOMER`, `OTHER`.
 
-   If your org runs a **human-in-the-loop approval policy or requestor-status
-   ruleset**, a submitted answer may be *held* instead of sent (see the ARM flow
-   above). Manage the hold queue with `qp pending list|approve|reject|withdraw`,
-   the per-type policy with `qp approval-policy get|set <types|ALL>`, and the
-   status rules with `qp requestor-ruleset get|add|set|clear` (inspect a
-   requestor's verified status first with `qp org-states <orgId>`). And
-   `qp arm` prints this whole flow.
+   Under **outbound gating** every submitted answer is *held* for approval unless a
+   rule releases it (see the ARM flow above). Manage the hold queue with
+   `qp pending list|approve|reject|withdraw`, and the outbound-gating rules with
+   `qp requestor-ruleset get|add|set|clear` (inspect a requestor's verified status
+   first with `qp org-states <orgId>`). And `qp arm` prints this whole flow.
 
 4. **Verify**: re-run `qp requests show <REQUEST_ID>` and confirm the workflow
    moved to `RESPONDED` with outcome `NFOU` (false) or `NORMAL` (true). Add
@@ -335,8 +333,7 @@ Tools: `reqport_doctor`, `reqport_list_requests`, `reqport_show_request`,
 `reqport_decrypt_payloads`, `reqport_respond_business_relationship` (accepts
 `relationshipTypes`), `reqport_respond`, the human-in-the-loop tools
 `reqport_pending_list`, `reqport_pending_approve`, `reqport_pending_reject`,
-`reqport_pending_withdraw`, `reqport_approval_policy_get`,
-`reqport_approval_policy_set`, the FIR tools `reqport_fir_list`,
+`reqport_pending_withdraw`, the FIR tools `reqport_fir_list`,
 `reqport_fir_show`, `reqport_fir_notify`, `reqport_fir_respond`,
 `reqport_fir_instruct_refund`, `reqport_fir_confirm_refund`,
 `reqport_fir_identity_request`, `reqport_fir_identity_respond`, and the KYC/CDD tools

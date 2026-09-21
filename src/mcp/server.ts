@@ -659,47 +659,6 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
     }
   );
 
-  // ── Approval policy ─────────────────────────────────────────────────────────
-
-  server.registerTool(
-    "reqport_approval_policy_get",
-    {
-      title: "Get the approval policy",
-      description:
-        "Show which response types require approval before send via GET /v1/responses/approval-policy (scope responses:read).",
-      inputSchema: { env: envSchema },
-    },
-    async ({ env }) => {
-      try {
-        return ok(await clientFor(env ?? defaultEnv).getApprovalPolicy());
-      } catch (e) {
-        return fail(e);
-      }
-    }
-  );
-
-  server.registerTool(
-    "reqport_approval_policy_set",
-    {
-      title: "Set the approval policy",
-      description:
-        "Set the response types that require approval via PUT /v1/responses/approval-policy (scope responses:write). Pass the sentinel [\"ALL\"] for every type, or [] for none.",
-      inputSchema: {
-        env: envSchema,
-        responseTypes: z
-          .array(z.string())
-          .describe('Response types requiring approval, or ["ALL"] for every type, or [] for none.'),
-      },
-    },
-    async ({ env, responseTypes }) => {
-      try {
-        return ok(await clientFor(env ?? defaultEnv).setApprovalPolicy(responseTypes));
-      } catch (e) {
-        return fail(e);
-      }
-    }
-  );
-
   // ── FIR — Fraud Incident Response ────────────────────────────────────────────
   //
   // Structured tools mirroring the CLI `qp fir …` commands. Bodies are camelCase
