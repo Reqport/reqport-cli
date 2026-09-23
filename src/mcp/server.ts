@@ -149,24 +149,34 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
   server.registerTool(
     "reqport_list_requests",
     {
-      title: "List responder requests",
+      title: "List requests",
       description:
-        "Discover requests via GET /v1/affordances. By default lists OPEN traversals addressed to your org (things to answer). Set mine=true for your org's own edges. Structure only — no content.",
+        "List requests via the unified GET /v1/workflows/requests projection — the SAME view the portal workspace list shows. Each item carries server-resolved display fields: counterpartyName / requesterName (public org-directory names), typeDescriptor {label, family}, and statusPhase (new | in_progress | responded), plus reference (invstgtnId / diarienummer / requestNumber), createdAt and deadline. state maps to the filter (open | in_progress | responded | closed); mine=true narrows to requests your org sent (OUTGOING); type filters client-side on the resolved family / label. Metadata only — no sealed content. (For the raw responder-edge affordances view use the discovery tools.)",
       inputSchema: {
         env: envSchema,
-        state: z.string().optional().describe("Affordance state (default open)."),
-        edgeType: z.string().optional().describe("Filter by edge/workflow type."),
-        mine: z.boolean().optional().describe("List owned edges (/mine) instead of addressed-to-me."),
+        state: z.string().optional().describe("Filter: open | in_progress | responded | closed (default open)."),
+        type: z.string().optional().describe("Filter client-side by resolved type family or label."),
+        mine: z.boolean().optional().describe("Narrow to requests your org sent (OUTGOING)."),
       },
     },
-    async ({ env, state, edgeType, mine }) => {
+    async ({ env, state, type, mine }) => {
       try {
-        const res = await clientFor(env ?? defaultEnv).listAffordances({
-          state: state ?? "open",
-          edgeType,
-          mine,
+        const res = await clientFor(env ?? defaultEnv).listRequests({
+          filter: state ?? "open",
         });
-        return ok(res);
+        let items = res.items ?? [];
+        if (mine) items = items.filter((i) => i.direction === "OUTGOING");
+        if (type) {
+          const needle = type.toLowerCase();
+          items = items.filter((i) =>
+            [i.typeDescriptor?.family, i.typeDescriptor?.label, i.requestType]
+              .filter(Boolean)
+              .join(" ")
+              .toLowerCase()
+              .includes(needle)
+          );
+        }
+        return ok({ items });
       } catch (e) {
         return fail(e);
       }

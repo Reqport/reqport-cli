@@ -32,6 +32,44 @@ export type AffordanceListResponse = {
   groups: AffordanceGroup[];
 };
 
+/**
+ * GET /v1/workflows/requests — the unified requests-list projection the portal
+ * workspace list also reads. Server-resolves the display-ready fields
+ * (counterpartyName, typeDescriptor, statusPhase) so every surface renders the
+ * same values instead of re-deriving them. Only the fields the CLI renders are
+ * typed here; the projection carries more (index signature keeps it forgiving).
+ */
+export type ListRequestTypeDescriptor = {
+  label: string;
+  family: "authority" | "structured" | "free-text" | "unknown";
+};
+export type ListRequestItem = {
+  workflowId: string;
+  requestType: string;
+  createdAt?: string | null;
+  direction?: "OUTGOING" | "INCOMING";
+  status: string;
+  /** Server-resolved counterparty display name (public directory); null when unresolved. */
+  counterpartyName?: string | null;
+  counterpartyOrgId?: string | null;
+  /** Server-resolved requester/submitter display name (public directory); null when unresolved. */
+  requesterName?: string | null;
+  requesterOrgId?: string | null;
+  /** Server-resolved {label, family} type descriptor. */
+  typeDescriptor?: ListRequestTypeDescriptor | null;
+  /** Server-resolved product phase: "new" | "in_progress" | "responded" (+ reserved). */
+  statusPhase?: string | null;
+  invstgtnId?: string | null;
+  diarienummer?: string | null;
+  requestNumber?: string | null;
+  deadline?: string | null;
+  lastActivityAt?: string | null;
+  [k: string]: unknown;
+};
+export type ListRequestsResponse = {
+  items: ListRequestItem[];
+};
+
 /** GET /v1/workflows/{id} */
 export type WorkflowInstanceResponse = {
   workflowInstanceId: string;
