@@ -223,6 +223,60 @@ export async function runCreateInformation(
   return 0;
 }
 
+/**
+ * `qp requests create free-text` — the going-forward free-text member of the
+ * request family: an authority-gated ask stated in plain language, for when no
+ * structured profile (business-relationship / tx-history / KYC) is the right
+ * shape. Modelled as a single graph-native free-text edge that supersedes and
+ * decommissions the legacy AUTHORITY_REQUEST_V1 and UNSTRUCTURED_AUTHORITY_REQUEST_V1
+ * workflow types. The responder answers on the generic response path.
+ *
+ * NOTE: the wire endpoint/edge name is unsettled; this reuses the existing
+ * free-text create path (createDirectInformation → POST /v1/requests/information)
+ * as a placeholder pending the kernel/vanta collapse PRs.
+ */
+export async function runCreateFreeText(
+  env: ReqportEnv,
+  opts: {
+    responder?: string;
+    responderOrg?: string;
+    request?: string;
+    case?: string;
+    legalBasis?: string;
+    personnummer?: string;
+    orgnr?: string;
+    json?: boolean;
+  }
+): Promise<number> {
+  if (!opts.request) throw new Error("--request <text> is required (the free-text ask).");
+  if (opts.personnummer && opts.orgnr) throw new Error("provide only one of --personnummer or --orgnr.");
+  if (!opts.case) throw new Error("--case <invstgtnId> is required.");
+  if (!opts.legalBasis) throw new Error("--legal-basis <mandate> is required.");
+
+  const body: DirectInformationRequest = {
+    ...responderLocator(opts),
+    request: opts.request,
+    invstgtnId: opts.case,
+    legalBasis: opts.legalBasis,
+    subjectPersonnummer: opts.personnummer,
+    subjectOrgNr: opts.orgnr,
+  };
+
+  const client = new ReqportClient({ env, credential: await requireResponderCredential() });
+  const res = await client.createDirectInformation(body);
+  if (opts.json) {
+    printJson(res);
+    return 0;
+  }
+  line(`Created free-text authority request ${res.requestId}`);
+  line(`  type:      ${res.workflowType ?? "free-text (graph-native; wire code pending reconciliation)"}`);
+  if (res.status) line(`  status:    ${res.status}`);
+  if (res.responderOrgId) line(`  responder: ${res.responderOrgId}`);
+  line("");
+  line(`Track it:  qp requests show ${res.requestId}`);
+  return 0;
+}
+
 export async function runShow(
   env: ReqportEnv,
   id: string,
