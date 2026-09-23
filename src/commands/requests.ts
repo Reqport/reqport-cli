@@ -227,13 +227,16 @@ export async function runCreateInformation(
  * `qp requests create free-text` — the going-forward free-text member of the
  * request family: an authority-gated ask stated in plain language, for when no
  * structured profile (business-relationship / tx-history / KYC) is the right
- * shape. Modelled as a single graph-native free-text edge that supersedes and
- * decommissions the legacy AUTHORITY_REQUEST_V1 and UNSTRUCTURED_AUTHORITY_REQUEST_V1
- * workflow types. The responder answers on the generic response path.
+ * shape. It is a graph-native ask that produces an UnstructuredData response:
+ * vanta dual-writes it to `edge.information.v1` (subject-anchored — a person/org
+ * node → UnstructuredData) when a subject is attached, else to the sourceless
+ * `edge.general-information.v1`. Supersedes and decommissions the legacy
+ * AUTHORITY_REQUEST_V1 and UNSTRUCTURED_AUTHORITY_REQUEST_V1 workflow types. The
+ * responder answers on the generic response path with a free-text / UnstructuredData
+ * response.
  *
- * NOTE: the wire endpoint/edge name is unsettled; this reuses the existing
- * free-text create path (createDirectInformation → POST /v1/requests/information)
- * as a placeholder pending the kernel/vanta collapse PRs.
+ * The create call flows through createDirectInformation (POST /v1/requests/information);
+ * vanta's binding maps it to the graph edge above.
  */
 export async function runCreateFreeText(
   env: ReqportEnv,
@@ -269,7 +272,7 @@ export async function runCreateFreeText(
     return 0;
   }
   line(`Created free-text authority request ${res.requestId}`);
-  line(`  type:      ${res.workflowType ?? "free-text (graph-native; wire code pending reconciliation)"}`);
+  line(`  type:      ${res.workflowType ?? "free-text (graph-native; UnstructuredData response)"}`);
   if (res.status) line(`  status:    ${res.status}`);
   if (res.responderOrgId) line(`  responder: ${res.responderOrgId}`);
   line("");
