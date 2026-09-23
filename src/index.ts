@@ -230,7 +230,7 @@ async function main(): Promise<void> {
   requestsCreate
     .command("free-text")
     .description(
-      "Create a free-text authority request — the going-forward free-text member of the request family (supersedes AUTHORITY_REQUEST_V1 / UNSTRUCTURED_AUTHORITY_REQUEST_V1)"
+      "Create a graph-native free-text authority request — a plain-language ask that produces an UnstructuredData response (subject-anchored edge.information.v1 when a subject is attached, else sourceless edge.general-information.v1); the going-forward free-text member of the request family (supersedes AUTHORITY_REQUEST_V1 / UNSTRUCTURED_AUTHORITY_REQUEST_V1)"
     )
     .requiredOption("--request <text>", "the free-text ask")
     .option("--responder <domain>", "responder by domain")
