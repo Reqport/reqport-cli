@@ -13,45 +13,97 @@ import type {
   DirectTransactionHistoryRequest,
 } from "../types.js";
 
+/** Short date (YYYY-MM-DD) from an ISO timestamp, or "" when absent. */
+function shortDate(iso?: string | null): string {
+  if (!iso) return "";
+  return String(iso).slice(0, 10);
+}
+
+/** Display reference: authority case → diarienummer → requestNumber → short id. */
+function referenceOf(item: {
+  invstgtnId?: string | null;
+  diarienummer?: string | null;
+  requestNumber?: string | null;
+  workflowId: string;
+}): string {
+  const r = item.invstgtnId ?? item.diarienummer ?? item.requestNumber;
+  if (r && String(r).trim()) return String(r).trim();
+  const id = String(item.workflowId ?? "").replace(/-/g, "");
+  return id.slice(-8).toUpperCase() || "—";
+}
+
+/**
+ * `qp requests list` — reads the SAME unified `/v1/workflows/requests` projection
+ * the portal workspace list uses (server-resolved counterparty name, type
+ * descriptor and status phase), so the CLI and portal show one consistent view.
+ * The raw responder-edge affordances view stays available via `client.listAffordances`
+ * for commands that need it (e.g. fir / kyc discovery, doctor).
+ */
 export async function runList(
   env: ReqportEnv,
   opts: { state?: string; type?: string; mine?: boolean; json?: boolean }
 ): Promise<number> {
   const client = new ReqportClient({ env, credential: await requireResponderCredential() });
-  const res = await client.listAffordances({
-    state: opts.state ?? "open",
-    edgeType: opts.type,
-    mine: opts.mine,
-  });
+  // `--state` maps to the projection's filter (open | in_progress | responded | closed).
+  const filter = opts.state ?? "open";
+  const res = await client.listRequests({ filter });
+
+  let items = res.items ?? [];
+  // `--mine` narrows to requests THIS org sent (OUTGOING); default shows all.
+  if (opts.mine) items = items.filter((i) => i.direction === "OUTGOING");
+  // `--type` filters client-side on the resolved family / label / raw type.
+  if (opts.type) {
+    const needle = opts.type.toLowerCase();
+    items = items.filter((i) => {
+      const hay = [
+        i.typeDescriptor?.family,
+        i.typeDescriptor?.label,
+        i.requestType,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(needle);
+    });
+  }
 
   if (opts.json) {
-    printJson(res);
+    printJson({ items });
     return 0;
   }
 
-  const rows: string[][] = [];
-  for (const group of res.groups ?? []) {
-    for (const item of group.items ?? []) {
-      rows.push([
-        item.workflowInstanceId,
-        item.edgeType,
-        item.edgeState,
-        item.createdAt ?? "",
-      ]);
-    }
-  }
-  if (rows.length === 0) {
+  if (items.length === 0) {
     line(
-      `No ${opts.mine ? "owned" : "addressed"} requests in state "${opts.state ?? "open"}"${opts.type ? ` of type ${opts.type}` : ""}.`
+      `No ${opts.mine ? "owned" : ""} requests in "${filter}"${opts.type ? ` of type ${opts.type}` : ""}.`
     );
     line(
       `(Sandbox is seeded by the synthetic authority reqport-authority-test.com; if empty, seeding may not have reached your org yet.)`
     );
     return 0;
   }
-  line(table(["REQUEST ID", "TYPE", "STATE", "CREATED"], rows));
+
+  const rows: string[][] = items.map((item) => [
+    item.workflowId,
+    item.counterpartyName ??
+      item.counterpartyOrgId ??
+      item.requesterName ??
+      item.requesterOrgId ??
+      "—",
+    item.typeDescriptor?.label ?? item.requestType ?? "",
+    item.statusPhase ?? item.status ?? "",
+    referenceOf(item),
+    shortDate(item.createdAt),
+    shortDate(item.deadline),
+  ]);
+
+  line(
+    table(
+      ["REQUEST ID", "COUNTERPARTY", "TYPE", "STATUS", "REFERENCE", "CREATED", "DEADLINE"],
+      rows
+    )
+  );
   line("");
-  line(`${res.total} request(s). Read one:  qp requests show <REQUEST ID>`);
+  line(`${items.length} request(s). Read one:  qp requests show <REQUEST ID>`);
   return 0;
 }
 

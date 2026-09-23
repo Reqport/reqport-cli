@@ -48,6 +48,7 @@ import type {
   FirUpdateRequest,
   KycResponseSubmission,
   KycResponseView,
+  ListRequestsResponse,
   PayloadMetaResponse,
   PendingActionResult,
   PendingListResponse,
@@ -232,6 +233,27 @@ export class ReqportClient {
       `/v1/affordances${suffix}${query}`,
       { method: "GET" }
     );
+  }
+
+  /**
+   * GET /v1/workflows/requests — the unified requests-list projection the portal
+   * workspace list reads. Server-resolves display-ready fields (counterpartyName,
+   * typeDescriptor, statusPhase) so the CLI renders the SAME projection as the
+   * portal instead of the raw responder-edge view (listAffordances). `filter` is
+   * one of open | in_progress | responded | closed; `status` is a raw workflow
+   * status (used only when no filter is given).
+   */
+  listRequests(params?: {
+    filter?: string;
+    status?: string;
+  }): Promise<ListRequestsResponse> {
+    const q = new URLSearchParams();
+    if (params?.filter) q.set("filter", params.filter);
+    else if (params?.status) q.set("status", params.status);
+    const query = q.toString() ? `?${q.toString()}` : "";
+    return this.request<ListRequestsResponse>(`/v1/workflows/requests${query}`, {
+      method: "GET",
+    });
   }
 
   // ── Request detail ───────────────────────────────────────────────────────

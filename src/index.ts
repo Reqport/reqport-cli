@@ -106,10 +106,10 @@ async function main(): Promise<void> {
 
   requests
     .command("list")
-    .description("List requests (via /v1/affordances). Default: open requests addressed to you.")
-    .option("-s, --state <state>", "affordance state", "open")
-    .option("-t, --type <edgeType>", "filter by workflow/edge type")
-    .option("--mine", "list your org's own edges (/mine) instead of addressed-to-me", false)
+    .description("List requests (unified /v1/workflows/requests projection — same view as the portal).")
+    .option("-s, --state <filter>", "filter: open | in_progress | responded | closed", "open")
+    .option("-t, --type <type>", "filter by resolved type family or label")
+    .option("--mine", "narrow to requests your org sent (OUTGOING)", false)
     .action((opts) =>
       wrap(async () => {
         const { runList } = await import("./commands/requests.js");
