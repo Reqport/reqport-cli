@@ -5,12 +5,20 @@
 import { ReqportClient } from "../client.js";
 import { type ReqportEnv } from "../env.js";
 import { requireResponderCredential } from "../auth/session.js";
-import { isBusinessRelationship, isTransactionHistory, readRequest } from "../core.js";
 import { line, printJson, table } from "../ui.js";
 import type {
+  AnswerData,
+  AttachmentsData,
   DirectInformationRequest,
   DirectKycRequest,
   DirectTransactionHistoryRequest,
+  LegalBasisData,
+  OverviewData,
+  PartiesSectionData,
+  RequestBodyData,
+  RequestView,
+  RequestViewSection,
+  TimelineData,
 } from "../types.js";
 
 /** Short date (YYYY-MM-DD) from an ISO timestamp, or "" when absent. */
@@ -332,55 +340,208 @@ export async function runCreateFreeText(
   return 0;
 }
 
+/** Human labels for the normalized section kinds the view emits. */
+const SECTION_TITLES: Record<string, string> = {
+  overview: "Overview",
+  parties: "Subjects",
+  legalBasis: "Legal basis",
+  requestBody: "Request",
+  answer: "Answer",
+  attachments: "Attachments",
+  timeline: "Timeline",
+};
+
+/** Two-space-indent a (possibly multi-line) block under a section. */
+function indent(s: string, pad = "  "): string {
+  return s
+    .split("\n")
+    .map((l) => (l.length ? pad + l : l))
+    .join("\n");
+}
+
+/**
+ * Render one typed section from the server-assembled view. Each `kind` gets a
+ * small formatter; an unknown kind is printed with its raw data rather than
+ * crashing, so a newly-added section type degrades gracefully.
+ */
+function renderSection(section: RequestViewSection): void {
+  const title = SECTION_TITLES[section.kind] ?? section.kind;
+  line(`${title}:`);
+  const data = section.data as unknown;
+
+  switch (section.kind) {
+    case "overview": {
+      const fields = (data as OverviewData)?.fields ?? [];
+      if (fields.length === 0) {
+        line(indent("(no fields)"));
+        break;
+      }
+      for (const f of fields) {
+        line(indent(`${f.label ?? ""}: ${f.value ?? ""}`));
+      }
+      break;
+    }
+    case "parties": {
+      const subjects = (data as PartiesSectionData)?.subjects ?? [];
+      if (subjects.length === 0) {
+        line(indent("(no subjects)"));
+        break;
+      }
+      for (const s of subjects) {
+        const scheme = s.scheme ? ` [${s.scheme}]` : "";
+        const label = s.label ? `${s.label}: ` : "";
+        line(indent(`${s.kind ?? "OTHER"}  ${label}${s.identifier ?? ""}${scheme}`));
+      }
+      break;
+    }
+    case "legalBasis": {
+      const bases = (data as LegalBasisData)?.bases ?? [];
+      if (bases.length === 0) {
+        line(indent("(none stated)"));
+        break;
+      }
+      for (const b of bases) line(indent(`- ${b}`));
+      break;
+    }
+    case "requestBody": {
+      const prose = (data as RequestBodyData)?.prose;
+      line(indent(prose && prose.trim() ? prose : "(no free-text body)"));
+      break;
+    }
+    case "answer": {
+      const a = data as AnswerData;
+      if (a?.outcome) line(indent(`outcome: ${a.outcome}`));
+      if (a?.hasRelationship !== undefined && a?.hasRelationship !== null) {
+        line(indent(`has relationship: ${a.hasRelationship}`));
+      }
+      if (a?.relationshipTypes && a.relationshipTypes.length > 0) {
+        line(indent(`relationship types: ${a.relationshipTypes.join(", ")}`));
+      }
+      for (const ac of a?.accounts ?? []) {
+        const scheme = ac.scheme ? `:${ac.scheme}` : "";
+        const label = ac.label ? ` (${ac.label})` : "";
+        const chain = ac.chain ? ` on ${ac.chain}` : "";
+        line(indent(`${ac.instrumentType ?? "ACCOUNT"} ${ac.identifier ?? ""}${scheme}${label}${chain}`));
+      }
+      if (a?.note) line(indent(`note: ${a.note}`));
+      break;
+    }
+    case "attachments": {
+      const entries = (data as AttachmentsData)?.entries ?? [];
+      if (entries.length === 0) {
+        line(indent("(none)"));
+        break;
+      }
+      for (const e of entries) {
+        const dir = e.direction ? `${e.direction} ` : "";
+        const at = e.at ? ` @ ${e.at}` : "";
+        line(indent(`${dir}${e.payloadId ?? ""}${at}`));
+      }
+      line(indent("(decrypt bytes with: qp requests show <id> then decrypt-batch)"));
+      break;
+    }
+    case "timeline": {
+      const events = (data as TimelineData)?.events ?? [];
+      if (events.length === 0) {
+        line(indent("(no events)"));
+        break;
+      }
+      for (const ev of events) {
+        const dir = ev.direction ? `${ev.direction} ` : "";
+        const at = ev.at ? `${ev.at}  ` : "";
+        line(indent(`${at}${dir}${ev.type ?? ""}`));
+      }
+      break;
+    }
+    default: {
+      // Unknown/forward-compatible kind — never crash; show the raw data.
+      line(indent("(unrecognized section kind — raw data below)"));
+      line(indent(JSON.stringify(data, null, 2)));
+      break;
+    }
+  }
+  line("");
+}
+
+/**
+ * `qp requests show <id>` — render a request from the server-assembled VIEW
+ * endpoint `GET /v1/workflows/{id}/view`. Vanta decrypts the caller's own copy
+ * in the TEE and returns a render-ready model: an identity header, the parties +
+ * the caller's role, and a uniform list of typed `sections[]`. The CLI walks the
+ * sections and draws each `kind`, so it shows the SAME section-typed model the
+ * portal renders (unknown kinds degrade to their raw data rather than crash).
+ *
+ * (Repointed from the previous getWorkflow + request-payload + decrypt-batch
+ * read; that server-assisted decrypt path still backs `qp respond --show` via
+ * `readRequest` in core.ts.)
+ */
 export async function runShow(
   env: ReqportEnv,
   id: string,
   opts: { json?: boolean }
 ): Promise<number> {
   const client = new ReqportClient({ env, credential: await requireResponderCredential() });
-  const detail = await readRequest(client, id);
+  const view = await client.getRequestView(id);
 
   if (opts.json) {
-    printJson(detail);
+    printJson(view);
     return 0;
   }
 
-  const wf = detail.workflow;
-  line(`Request ${wf.workflowInstanceId}`);
-  line(`  type:      ${wf.workflowType}`);
-  line(`  status:    ${wf.status}${wf.responseOutcome ? ` (${wf.responseOutcome})` : ""}`);
-  if (wf.requesterOrgId) line(`  requester: ${wf.requesterOrgId}`);
-  if (wf.responderOrgId) line(`  responder: ${wf.responderOrgId}`);
-  line(`  you are:   ${wf.callerIsResponder ? "the RESPONDER (you answer this)" : "a party"}`);
-  if (wf.relatesToWorkflowInstanceId)
-    line(`  relates to: ${wf.relatesToWorkflowInstanceId}`);
-  line("");
+  const identity = view.identity ?? {};
+  const parties = view.parties ?? {};
+  const role = parties.role ?? "";
 
-  if (detail.decoded?.ok) {
-    line("Request content (decrypted in the TEE):");
-    if (detail.decoded.json !== undefined) {
-      line(JSON.stringify(detail.decoded.json, null, 2));
-    } else {
-      line(detail.decoded.text ?? "");
-    }
-  } else if (detail.readNote) {
-    line(detail.readNote);
+  // Identity header: title + case number + status.
+  line(identity.title ? `${identity.title}` : `Request ${view.id}`);
+  line(`  id:        ${view.id}`);
+  if (view.type) line(`  type:      ${view.type}`);
+  if (identity.caseNumber) line(`  case #:    ${identity.caseNumber}`);
+  const statusKind =
+    identity.statusKind && identity.statusKind !== identity.status
+      ? ` (${identity.statusKind})`
+      : "";
+  if (identity.status || identity.statusKind) {
+    line(`  status:    ${identity.status ?? identity.statusKind}${statusKind}`);
   }
 
+  // Parties + the caller's role.
+  const requester = parties.requester;
+  const responder = parties.responder;
+  if (requester) {
+    line(`  requester: ${requester.name ?? requester.orgId}${requester.name ? ` (${requester.orgId})` : ""}`);
+  }
+  if (responder) {
+    line(`  responder: ${responder.name ?? responder.orgId}${responder.name ? ` (${responder.orgId})` : ""}`);
+  }
+  if (role) {
+    line(`  you are:   ${role === "RESPONDER" ? "the RESPONDER (you answer this)" : role}`);
+  }
+
+  // Capabilities (what the caller may do next), when any are true.
+  const caps = view.capabilities;
+  if (caps) {
+    const can = [
+      caps.canRespond ? "respond" : null,
+      caps.canMessage ? "message" : null,
+      caps.canClaim ? "claim" : null,
+    ].filter(Boolean);
+    if (can.length > 0) line(`  can:       ${can.join(", ")}`);
+  }
   line("");
-  if (isBusinessRelationship(wf.workflowType)) {
-    line("Answer it:");
-    line(`  qp respond ${id} --has-relationship false          # no such customer (auth.002 NFOU)`);
-    line(`  qp respond ${id} --has-relationship true --account ACCOUNT:SE1234567890:IBAN:Main`);
-    line(`  qp respond ${id} --has-relationship true --account ACCOUNT:SE1234567890:IBAN:Main \\`);
-    line(`      --relationship-types CUSTOMER,ACCOUNT_HOLDER   # optional but recommended: enables a targeted follow-up (data minimisation)`);
-  } else if (isTransactionHistory(wf.workflowType)) {
-    line("Answer it with a camt.053-CA statement (an open crypto-asset profile of ISO 20022 camt.053):");
-    line(`  qp respond ${id} --statement ./statement.json   # inline; validated + sealed server-side`);
+
+  // Walk the render-ready sections in server order.
+  const sections = view.sections ?? [];
+  if (sections.length === 0) {
+    line("(no sections)");
   } else {
-    line("Answer it:");
-    line(`  qp respond ${id} --status NFOU`);
-    line(`  qp respond ${id} --status COMP --free-text "…"`);
+    for (const section of sections) renderSection(section);
+  }
+
+  // Responder next-step hint (the view's capabilities drive it; the per-type
+  // answer flags live on `qp respond`).
+  if (caps?.canRespond) {
+    line(`Answer it:  qp respond ${id} --help   # picks the right answer flags for this type`);
   }
   return 0;
 }

@@ -34,7 +34,6 @@ import {
   performRespond,
   readFirCase,
   readKycResponse,
-  readRequest,
 } from "../core.js";
 import { explainError } from "../ui.js";
 import {
@@ -186,14 +185,14 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
   server.registerTool(
     "reqport_show_request",
     {
-      title: "Show a request (decrypted)",
+      title: "Show a request (server-assembled view)",
       description:
-        "Read one request: workflow metadata + the request payload decrypted server-side in the TEE (server-assisted, no client crypto).",
+        "Read one request via the server-assembled VIEW: GET /v1/workflows/{id}/view. Vanta decrypts the caller's own copy in the TEE and returns a render-ready RequestView — the SAME section-typed model the portal renders (no client crypto). Top level: { apiVersion, id, type, identity {caseNumber, title, status, statusKind}, parties {requester, responder, role}, capabilities {canRespond, canMessage, canClaim}, sections[] }. Each section is { kind, data }; a section is present only when it has content. Section kinds: overview {fields:[{label,value}]}, parties {subjects:[{kind,label,identifier,scheme}]}, legalBasis {bases:string[]}, requestBody {prose}, answer {outcome, hasRelationship, relationshipTypes, accounts:[{instrumentType,identifier,scheme,label,chain}], note}, attachments {entries:[{payloadId,direction,at}]} (content-blind manifest — decrypt bytes via reqport_decrypt_payloads), timeline {events:[{type,direction,at}]}. Walk sections[] and handle each kind; ignore unknown kinds/fields (the contract is additive).",
       inputSchema: { env: envSchema, id: z.string().describe("Workflow/request id.") },
     },
     async ({ env, id }) => {
       try {
-        return ok(await readRequest(clientFor(env ?? defaultEnv), id));
+        return ok(await clientFor(env ?? defaultEnv).getRequestView(id));
       } catch (e) {
         return fail(e);
       }

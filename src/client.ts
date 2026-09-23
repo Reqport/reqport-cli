@@ -53,6 +53,7 @@ import type {
   PendingActionResult,
   PendingListResponse,
   PendingResponse,
+  RequestView,
   ResponseResult,
   ResponseSubmission,
   TransactionHistoryAnswer,
@@ -261,6 +262,22 @@ export class ReqportClient {
   getWorkflow(id: string): Promise<WorkflowInstanceResponse> {
     return this.request<WorkflowInstanceResponse>(
       `/v1/workflows/${encodeURIComponent(id)}`,
+      { method: "GET" }
+    );
+  }
+
+  /**
+   * GET /v1/workflows/{workflowInstanceId}/view — the server-assembled request
+   * VIEW: the request decrypted FOR THE CALLER in the TEE and projected onto a
+   * uniform list of typed sections (overview / parties / legalBasis /
+   * requestBody / answer / attachments / timeline), the SAME render-ready model
+   * the portal request-detail page reads. The CLI walks `sections[]` and draws
+   * each `kind`, so both surfaces show one consistent model instead of
+   * re-shaping a raw workflow + decrypted payload per surface.
+   */
+  getRequestView(id: string): Promise<RequestView> {
+    return this.request<RequestView>(
+      `/v1/workflows/${encodeURIComponent(id)}/view`,
       { method: "GET" }
     );
   }
