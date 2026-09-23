@@ -124,7 +124,7 @@ async function main(): Promise<void> {
 
   requests
     .command("show <id>")
-    .description("Show one request, decrypting its content in the TEE")
+    .description("Show one request from the server-assembled view (GET /v1/workflows/{id}/view) — the same section-typed model the portal renders")
     .action((id) =>
       wrap(async () => {
         const { runShow } = await import("./commands/requests.js");

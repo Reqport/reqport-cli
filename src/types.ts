@@ -70,6 +70,111 @@ export type ListRequestsResponse = {
   items: ListRequestItem[];
 };
 
+/**
+ * GET /v1/workflows/{workflowInstanceId}/view — the server-assembled request
+ * VIEW (mirrors the Vanta `RequestView` DTO). Where `/v1/workflows/{id}` hands
+ * back the raw workflow row and the payload must be decrypted client-side, the
+ * `/view` endpoint decrypts the caller's own copy in the TEE and projects the
+ * request onto a uniform list of typed {@link RequestViewSection sections}, so
+ * the CLI (like the portal) can be a thin renderer that walks `sections[]` and
+ * draws each `kind`. A section is present only when it has content. The shape is
+ * additive/forward-compatible — unknown section kinds and fields are ignored.
+ */
+export type RequestViewParty = { orgId: string; name?: string | null };
+export type RequestViewIdentity = {
+  /** Requester's case / investigation id (invstgtnId / diarienummer), or null when undecryptable. */
+  caseNumber?: string | null;
+  title?: string | null;
+  /** Raw workflow status: SENT | RESPONDED | CLOSED. */
+  status?: string | null;
+  /** Normalized lifecycle bucket: OPEN | ANSWERED | CLOSED | PENDING_APPROVAL | DECLINED. */
+  statusKind?: string | null;
+};
+export type RequestViewParties = {
+  requester?: RequestViewParty | null;
+  responder?: RequestViewParty | null;
+  /** The caller's role in this request: REQUESTER | RESPONDER. */
+  role?: string | null;
+};
+export type RequestViewCapabilities = {
+  canRespond?: boolean;
+  canMessage?: boolean;
+  canClaim?: boolean;
+};
+
+/** overview: ordered scalar label/value fields. */
+export type OverviewField = { label?: string | null; value?: string | null };
+export type OverviewData = { fields?: OverviewField[] };
+
+/** parties: the subjects the request is about (persons / organisations / instruments). */
+export type PartySubject = {
+  /** PERSON | ORGANISATION | INSTRUMENT | OTHER. */
+  kind?: string | null;
+  label?: string | null;
+  identifier?: string | null;
+  scheme?: string | null;
+};
+export type PartiesSectionData = { subjects?: PartySubject[] };
+
+/** legalBasis: the legal mandate(s) the requester asserts. */
+export type LegalBasisData = { bases?: string[] };
+
+/** requestBody: the free-text ask, decrypted for the caller. */
+export type RequestBodyData = { prose?: string | null };
+
+/** answer: the responder's answer, when the request has been answered. */
+export type AnswerAccount = {
+  instrumentType?: string | null;
+  identifier?: string | null;
+  scheme?: string | null;
+  label?: string | null;
+  chain?: string | null;
+};
+export type AnswerData = {
+  /** auth.002 outcome carried on the workflow row: NORMAL | NFOU | null. */
+  outcome?: string | null;
+  hasRelationship?: boolean | null;
+  relationshipTypes?: string[];
+  accounts?: AnswerAccount[];
+  note?: string | null;
+};
+
+/** attachments: a content-blind manifest (no bytes; references only). */
+export type AttachmentManifestEntry = {
+  payloadId?: string | null;
+  /** OUTBOUND | INBOUND | null. */
+  direction?: string | null;
+  at?: string | null;
+};
+export type AttachmentsData = { entries?: AttachmentManifestEntry[] };
+
+/** timeline: the ordered thread of events visible to the caller. */
+export type TimelineEvent = {
+  /** REQUEST_BODY / RESPONSE_BODY / REQUESTER_MESSAGE_BODY / ATTACHMENT / … */
+  type?: string | null;
+  /** OUTBOUND | INBOUND | null. */
+  direction?: string | null;
+  at?: string | null;
+};
+export type TimelineData = { events?: TimelineEvent[] };
+
+/** A uniform, render-ready section. `data` shape depends on `kind`. */
+export type RequestViewSection = { kind: string; data: unknown };
+
+export type RequestView = {
+  /** Always 1; bumped on breaking shape changes. */
+  apiVersion?: number;
+  id: string;
+  /** Raw workflow type (e.g. BUSINESS_RELATIONSHIP_CHECK_V1). */
+  type?: string | null;
+  identity?: RequestViewIdentity | null;
+  parties?: RequestViewParties | null;
+  capabilities?: RequestViewCapabilities | null;
+  /** The render-ready typed sections, in display order. */
+  sections?: RequestViewSection[];
+  [k: string]: unknown;
+};
+
 /** GET /v1/workflows/{id} */
 export type WorkflowInstanceResponse = {
   workflowInstanceId: string;
