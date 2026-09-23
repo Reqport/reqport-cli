@@ -387,6 +387,32 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
     }
   );
 
+  server.registerTool(
+    "reqport_create_free_text",
+    {
+      title: "Create a free-text authority request (One Request Family)",
+      description:
+        "Create the GOING-FORWARD free-text authority request: an authority-gated ask stated in FREE TEXT, for when no structured profile (business-relationship-check, transaction-history, kyc) is the right shape. Modelled as a single graph-native free-text edge that supersedes and decommissions the legacy AUTHORITY_REQUEST_V1 / UNSTRUCTURED_AUTHORITY_REQUEST_V1 workflow types. The responder answers on the generic response path. Server-sealed in the TEE. Needs an authority key (scope authority:write). Give exactly one of responderDomain / responderOrgId. NOTE: the wire endpoint/edge name is unsettled — this reuses the existing free-text create path as a placeholder pending the kernel/vanta collapse PRs.",
+      inputSchema: {
+        env: envSchema,
+        responderDomain: z.string().optional(),
+        responderOrgId: z.string().optional(),
+        request: z.string().describe("The free-text ask."),
+        invstgtnId: z.string().describe("Investigation / case id."),
+        legalBasis: z.string().describe("Legal mandate."),
+        subjectPersonnummer: z.string().optional().describe("Optional subject personnummer (sealed)."),
+        subjectOrgNr: z.string().optional().describe("Optional subject org.nr (sealed)."),
+      },
+    },
+    async ({ env, ...body }) => {
+      try {
+        return ok(await clientFor(env ?? defaultEnv).createDirectInformation(body));
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
   // ── Multi-org chat ─────────────────────────────────────────────────────────
 
   const targetSchema = z
