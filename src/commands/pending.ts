@@ -16,8 +16,9 @@
 import { ReqportClient } from "../client.js";
 import { type ReqportEnv } from "../env.js";
 import { requireResponderCredential } from "../auth/session.js";
+import { serverDecision } from "../armSurface.js";
 import { confirm, line, printJson, table } from "../ui.js";
-import type { PendingResponse } from "../types.js";
+import type { PendingActionResult, PendingResponse } from "../types.js";
 
 async function clientFor(env: ReqportEnv): Promise<ReqportClient> {
   return new ReqportClient({ env, credential: await requireResponderCredential() });
@@ -81,7 +82,7 @@ export async function runPendingApprove(
   id: string,
   opts: { yes?: boolean; json?: boolean }
 ): Promise<number> {
-  if (!(await confirmAction(opts, `Approve held response ${id}? It will be sealed and sent.`))) {
+  if (!(await confirmAction(opts, `Approve held response ${id}? The server seals and sends it when it accepts this approval.`))) {
     return 1;
   }
   const client = await clientFor(env);
@@ -91,9 +92,7 @@ export async function runPendingApprove(
     printJson(res);
     return 0;
   }
-  line(`Approved held response ${res.id ?? id} — sealed and sent server-side.`);
-  if (res.status) line(`  status:     ${res.status}`);
-  if (res.messageId) line(`  message id: ${res.messageId}`);
+  renderPendingDecision("approve", id, res);
   return 0;
 }
 
@@ -110,8 +109,7 @@ export async function runPendingReject(
     printJson(res);
     return 0;
   }
-  line(`Rejected held response ${res.id ?? id}.`);
-  if (res.status) line(`  status: ${res.status}`);
+  renderPendingDecision("reject", id, res);
   return 0;
 }
 
@@ -128,7 +126,60 @@ export async function runPendingWithdraw(
     printJson(res);
     return 0;
   }
-  line(`Withdrew held response ${res.id ?? id}.`);
-  if (res.status) line(`  status: ${res.status}`);
+  renderPendingDecision("withdraw", id, res);
   return 0;
+}
+
+/**
+ * Print only what the server decided. A HOLD or decline is not framed as
+ * sealed-and-sent; that wording is reserved for a server release.
+ */
+function renderPendingDecision(
+  action: "approve" | "reject" | "withdraw",
+  id: string,
+  res: PendingActionResult
+): void {
+  const decision = serverDecision(res);
+  const shownId = res.id ?? id;
+  if (decision === "held") {
+    line(`Server left response ${shownId} awaiting approval${res.status ? ` (${res.status})` : ""}.`);
+    if (typeof res.approvalState === "string" && res.approvalState) {
+      line(`  approval: ${res.approvalState}`);
+    }
+    return;
+  }
+  if (decision === "declined") {
+    line(`Server declined response ${shownId}${res.status ? ` (${res.status})` : ""}.`);
+    if (typeof res.reason === "string" && res.reason) line(`  reason: ${res.reason}`);
+    return;
+  }
+  if (action === "approve" && decision === "released") {
+    line(`Approved held response ${shownId} — sealed and sent server-side.`);
+    if (res.status) line(`  status:     ${res.status}`);
+    if (res.messageId) line(`  message id: ${res.messageId}`);
+    return;
+  }
+  if (action === "approve") {
+    // unspecified / empty / unknown: the raw status only. No release claim.
+    line(`Server response for ${shownId}: ${rawStatus(res)}`);
+    if (typeof res.approvalState === "string" && res.approvalState) {
+      line(`  approval: ${res.approvalState}`);
+    }
+    if (res.messageId) line(`  message id: ${res.messageId}`);
+    return;
+  }
+  if (action === "reject") {
+    line(`Rejected held response ${shownId}.`);
+  } else if (action === "withdraw") {
+    line(`Withdrew held response ${shownId}.`);
+  } else {
+    line(`Server response for ${shownId}: ${rawStatus(res)}`);
+  }
+  if (res.status) line(`  status:     ${res.status}`);
+  if (res.messageId) line(`  message id: ${res.messageId}`);
+}
+
+function rawStatus(res: PendingActionResult): string {
+  if (typeof res.status !== "string" || res.status.trim() === "") return "(no status)";
+  return res.status;
 }

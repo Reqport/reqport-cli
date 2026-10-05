@@ -19,6 +19,7 @@ import {
   type RespondInput,
 } from "../core.js";
 import type { AccountInstrument } from "../types.js";
+import { serverDecision } from "../armSurface.js";
 import { line, printJson } from "../ui.js";
 
 export type RespondCliOptions = {
@@ -152,10 +153,24 @@ export async function runRespond(
     printJson(outcome);
     return 0;
   }
+  const decision = serverDecision(outcome.result);
   line("");
   line(`Submitted via /v1/requests/{id}/${outcome.endpoint}`);
-  line(`  result status: ${outcome.result.status ?? "(ok)"}`);
+  line(`  result status: ${outcome.result.status ?? "(no status)"}`);
+  if (typeof outcome.result.approvalState === "string" && outcome.result.approvalState) {
+    line(`  approval:      ${outcome.result.approvalState}`);
+  }
   if (outcome.result.messageId) line(`  message id:    ${outcome.result.messageId}`);
+  if (decision === "held") {
+    line("  Awaiting approval. Review it with `qp pending list`.");
+  } else if (decision === "declined") {
+    line("  The server declined this answer.");
+    if (typeof outcome.result.reason === "string" && outcome.result.reason) {
+      line(`  reason:        ${outcome.result.reason}`);
+    }
+  } else if (decision === "released") {
+    line("  The server released this answer.");
+  }
   line("Verify:  qp requests show " + id);
   return 0;
 }

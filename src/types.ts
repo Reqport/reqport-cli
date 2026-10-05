@@ -281,10 +281,16 @@ export type ResponseItem = {
   freeText?: string;
 };
 export type ResponseSubmission = {
-  status: "COMP" | "NFOU";
+  status?: "COMP" | "NFOU";
   items: ResponseItem[];
   note?: string;
   accounts?: AccountInstrument[];
+  /**
+   * Inline camt.053-CA statement, when the caller supplied one on this path.
+   * On an information answer vanta rejects it with HTTP 400
+   * ARM_INFORMATION_STRUCTURED_FIELDS. The CLI forwards it; it does not drop it.
+   */
+  statement?: unknown;
 };
 
 // ── Create (requester / authority side — identifier-first, no BR check) ─────
