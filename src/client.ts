@@ -198,6 +198,9 @@ export class ReqportClient {
     }
     if (idempotent) h["Idempotency-Key"] = randomUUID();
 
+    // One attempt. This client does not retry a lost response. A second POST
+    // of an ARM release id is ARM_RELEASE_REPLAYED even when the first call
+    // already committed.
     let res: Response;
     try {
       res = await fetch(this.url(path), { ...rest, headers: h });
@@ -463,10 +466,16 @@ export class ReqportClient {
    * POST /v3/workflows/{id}/respond — the encrypted formal respond.
    *
    * Vanta requires `X-Reqport-Arm-Release-Id` on this call. The id is the one
-   * captured from a released `POST /v1/requests/{id}/response` (or a human
-   * RELEASED approve). Callers must not invoke this for HOLD or DECLINE.
+   * captured from a released disposition (`AUTO_RELEASE` or human `RELEASED`).
+   * Callers must not invoke this for HOLD or DECLINE.
+   *
+   * Single attempt, and no Idempotency-Key. `idempotent: true` would mint a new
+   * key on every call, so a blind retry after a lost response is a new attempt
+   * and comes back as ARM_RELEASE_REPLAYED even though the answer went through.
+   * This method does not retry. A REPLAYED response means already submitted —
+   * check the request status.
    */
-  respondFormalV3(
+  async respondFormalV3(
     workflowInstanceId: string,
     body: FormalRespondRequest,
     releaseId: string
@@ -475,15 +484,22 @@ export class ReqportClient {
     if (!id) {
       throw new Error("Formal respond requires an ARM release id.");
     }
-    return this.request<FormalRespondResult>(
-      `/v3/workflows/${encodeURIComponent(workflowInstanceId)}/respond`,
-      {
-        method: "POST",
-        idempotent: true,
-        headers: { [ARM_RELEASE_ID_HEADER]: id },
-        body: JSON.stringify(body),
-      }
-    );
+    try {
+      return await this.request<FormalRespondResult>(
+        `/v3/workflows/${encodeURIComponent(workflowInstanceId)}/respond`,
+        {
+          method: "POST",
+          headers: { [ARM_RELEASE_ID_HEADER]: id },
+          body: JSON.stringify(body),
+        }
+      );
+    } catch (e) {
+      if (e instanceof ReqportApiError) throw e;
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(
+        `${msg} The formal respond was not retried. If it already committed, check the request status; a second attempt is ARM_RELEASE_REPLAYED.`
+      );
+    }
   }
 
   /**

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 /**
  * ARM v0.1 machine-surface copy shared by CLI help and MCP tool docs.
  *
@@ -13,8 +15,9 @@ export const ARM_SURFACE_BRIEF =
   "Accounts, an inline statement, or camt on an information answer return HTTP 400 ARM_INFORMATION_STRUCTURED_FIELDS. " +
   "Both carry the server steer (family ARM, use free-text or enable, discovery GET arm-status; rejectedFields on the 400). " +
   "CLI --json and MCP return that body unchanged. " +
-  "When POST /v1/requests/{id}/response (or a human RELEASED approve) includes releaseId, that id is sent as header X-Reqport-Arm-Release-Id on POST /v3/workflows/{id}/respond. " +
-  "HOLD and DECLINE do not send the header. ARM_RELEASE_* errors are the server message and body.";
+  "A released disposition (AUTO_RELEASE or RELEASED) that includes releaseId is forwarded with the gate shape unchanged, as header X-Reqport-Arm-Release-Id on POST /v3/workflows/{id}/respond. " +
+  "That formal call is a single attempt and is not retried. HOLD and DECLINE send neither the header nor a shape. " +
+  "ARM_RELEASE_* errors are the server message and body. ARM_RELEASE_REPLAYED means the answer was already submitted; check the request status.";
 
 /** How the server classified a 2xx response body. Never inferred locally. */
 export type ServerDecision = "released" | "held" | "declined" | "unspecified";
@@ -26,7 +29,7 @@ export type ServerDecision = "released" | "held" | "declined" | "unspecified";
  * Held wins over decline, and decline wins over release, when a body carries
  * more than one of these tokens.
  */
-const HELD_STATES: ReadonlySet<string> = new Set(["HOLD_FOR_APPROVAL", "PENDING_APPROVAL"]);
+const HELD_STATES: ReadonlySet<string> = new Set(["HOLD", "HOLD_FOR_APPROVAL", "PENDING_APPROVAL"]);
 const DECLINED_STATES: ReadonlySet<string> = new Set(["DECLINE", "DECLINED", "RESPONSE_DECLINED"]);
 /**
  * AUTO_RELEASE and RESPONDED are the ruleset/response tokens from Gap 6.
@@ -41,15 +44,29 @@ function enumToken(value: unknown): string | undefined {
   return token === "" ? undefined : token;
 }
 
+function classifyToken(token: string): ServerDecision | undefined {
+  if (HELD_STATES.has(token)) return "held";
+  if (DECLINED_STATES.has(token)) return "declined";
+  if (RELEASED_STATES.has(token)) return "released";
+  return undefined;
+}
+
 /**
- * Read the server's own status / approvalState / action. Anything that is not
- * one of the enums above is unspecified — this function does not guess.
+ * Read the server decision. `disposition` is authoritative when present
+ * (`AUTO_RELEASE`, `RELEASED`, `HOLD`, `DECLINE`, …). Legacy `status` /
+ * `approvalState` / `action` are used only when disposition is absent.
+ * Anything else is unspecified — this function does not guess.
  */
 export function serverDecision(result: {
+  disposition?: unknown;
   status?: unknown;
   approvalState?: unknown;
   action?: unknown;
 }): ServerDecision {
+  const disposition = enumToken(result.disposition);
+  if (disposition !== undefined) {
+    return classifyToken(disposition) ?? "unspecified";
+  }
   const tokens = [enumToken(result.status), enumToken(result.approvalState), enumToken(result.action)].filter(
     (token): token is string => token !== undefined
   );
@@ -68,6 +85,7 @@ export const ARM_RELEASE_ID_HEADER = "X-Reqport-Arm-Release-Id";
  * HOLD, DECLINE, and unknown tokens yield undefined even if a releaseId is present.
  */
 export function releasedArmReleaseId(result: {
+  disposition?: unknown;
   status?: unknown;
   approvalState?: unknown;
   action?: unknown;
@@ -82,4 +100,12 @@ export function releasedArmReleaseId(result: {
 /** True for vanta's ARM release-gate codes (ARM_RELEASE_REQUIRED, and the rest of that family). */
 export function isArmReleaseErrorCode(code: string | undefined): boolean {
   return typeof code === "string" && code.startsWith("ARM_RELEASE_");
+}
+
+/**
+ * Non-reversible label for an unused release id. Error text may show this.
+ * It must never include the full token.
+ */
+export function releaseIdFingerprint(releaseId: string): string {
+  return createHash("sha256").update(releaseId, "utf8").digest("hex").slice(0, 12);
 }

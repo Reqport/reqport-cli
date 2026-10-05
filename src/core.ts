@@ -297,16 +297,28 @@ export type RespondOutcome = {
  * on an older released body also skips the call, so servers that do not yet
  * emit releaseId keep the single-call path.
  */
+/**
+ * The gate's shape object, or undefined. This does not copy `slug` /
+ * `itemModes` / `presence` into a new object — the formal body carries the
+ * same value the gate stored.
+ */
+function unchangedGateShape(value: unknown): FormalRespondRequest["shape"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  return value as FormalRespondRequest["shape"];
+}
+
 export async function forwardArmRelease(
   client: ReqportClient,
   workflowInstanceId: string,
   gate: {
+    disposition?: unknown;
     status?: unknown;
     approvalState?: unknown;
     action?: unknown;
     releaseId?: unknown;
     messageId?: unknown;
     payloadId?: unknown;
+    shape?: unknown;
   },
   hints?: { nfou?: boolean; payloadId?: string }
 ): Promise<FormalRespondResult | undefined> {
@@ -315,7 +327,9 @@ export async function forwardArmRelease(
   const fromGate = typeof gate.payloadId === "string" ? gate.payloadId.trim() : "";
   const payloadId = (hints?.payloadId?.trim() || fromGate) || undefined;
   const messageId = typeof gate.messageId === "string" ? gate.messageId.trim() : "";
+  const shape = unchangedGateShape(gate.shape);
   const body: FormalRespondRequest = {};
+  if (shape) body.shape = shape;
   if (hints?.nfou) body.nfou = true;
   if (messageId) body.correlationId = messageId;
   if (payloadId) body.responsePayload = { payloadId, purpose: "RESPONSE" };
@@ -878,6 +892,9 @@ export type KycRespondInput = {
  * an inline record is given, spot-validates its enums; guards against supplying
  * BOTH an inline record and a payload_id (the server uses the payload_id and
  * ignores the record). Shared by the CLI `qp kyc respond` command and the MCP tool.
+ *
+ * KYC is not an ARM release-id path. This function does not read a release id
+ * and does not call the v3 formal respond.
  */
 export async function performKycRespond(
   client: ReqportClient,
@@ -902,12 +919,7 @@ export async function performKycRespond(
   if (input.payloadId) body.payload_id = input.payloadId;
   if (input.note) body.note = input.note;
 
-  const result = await client.submitKycResponse(requestId, body);
-  await forwardArmRelease(client, requestId, result, {
-    nfou: input.recordStatus === "NOT_FOUND",
-    payloadId: input.payloadId,
-  });
-  return result;
+  return client.submitKycResponse(requestId, body);
 }
 
 /** Read a KYC/CDD response (content-blind read-back). */

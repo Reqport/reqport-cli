@@ -16,7 +16,7 @@
 import { ReqportClient } from "../client.js";
 import { type ReqportEnv } from "../env.js";
 import { requireResponderCredential } from "../auth/session.js";
-import { releasedArmReleaseId, serverDecision } from "../armSurface.js";
+import { releasedArmReleaseId, releaseIdFingerprint, serverDecision } from "../armSurface.js";
 import { forwardArmRelease } from "../core.js";
 import { confirm, line, printJson, table } from "../ui.js";
 import type { FormalRespondResult, PendingActionResult, PendingResponse } from "../types.js";
@@ -128,7 +128,7 @@ async function forwardHumanRelease(
   const requestId = typeof res.requestId === "string" ? res.requestId.trim() : "";
   if (!requestId) {
     throw new Error(
-      `Server released pending response ${pendingId} with release id ${releaseId} but no requestId, so the formal respond was not sent.`
+      `Server released pending response ${pendingId} but the approve body had no requestId (release ${releaseIdFingerprint(releaseId)}). The formal respond was not sent.`
     );
   }
   return forwardArmRelease(client, requestId, res);

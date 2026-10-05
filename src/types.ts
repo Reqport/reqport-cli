@@ -368,7 +368,30 @@ export type ResponseResult = {
   payloadId?: string;
   approvalState?: string;
   action?: string;
+  /**
+   * Wire decision from the release gate. Preferred over status / approvalState / action.
+   * AUTO_RELEASE or RELEASED when the answer may be formally sent. HOLD and DECLINE
+   * omit releaseId and shape.
+   */
+  disposition?: string;
+  /**
+   * Shape the gate stored for this release (`slug`, `itemModes`, `presence`, and
+   * any other fields). Forwarded unchanged on the v3 formal respond.
+   */
+  shape?: ArmReleaseShape;
   reason?: string;
+  [k: string]: unknown;
+};
+
+/**
+ * Answer shape stored by the ARM release gate. The formal respond repeats this
+ * object as the gate returned it. The client does not rebuild slug, itemModes,
+ * or presence.
+ */
+export type ArmReleaseShape = {
+  slug: string;
+  itemModes: unknown;
+  presence: unknown;
   [k: string]: unknown;
 };
 
@@ -378,6 +401,8 @@ export type ResponseResult = {
  * has a payload id. The release id travels in the header, not this body.
  */
 export type FormalRespondRequest = {
+  /** Gate shape, unchanged. Absent on HOLD/DECLINE because those calls are not made. */
+  shape?: ArmReleaseShape;
   responsePayload?: {
     payloadId: string;
     purpose?: string;
@@ -508,6 +533,9 @@ export type PendingActionResult = {
   releaseId?: string;
   approvalState?: string;
   action?: string;
+  disposition?: string;
+  /** Gate shape to repeat on the formal respond. Not present on HOLD/DECLINE. */
+  shape?: ArmReleaseShape;
   reason?: string;
   payloadId?: string;
   [k: string]: unknown;

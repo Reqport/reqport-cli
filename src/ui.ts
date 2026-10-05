@@ -92,6 +92,12 @@ export function explainError(e: unknown): string {
       const json = JSON.stringify(envelope.body, null, 2);
       // ARM release-gate refusals keep the server's contract message. They are
       // never rewritten into a sealed-and-sent success.
+      if (e.code === "ARM_RELEASE_REPLAYED") {
+        // The release was already consumed. Say so; do not offer another send
+        // and do not describe it as sealed and sent.
+        const message = contractMessage(envelope.body) ?? "Already submitted. Check the request status.";
+        return `Already submitted. Check the request status.\n${message}\nHTTP ${envelope.httpStatus}\n${json}`;
+      }
       if (isArmReleaseErrorCode(e.code)) {
         const message = contractMessage(envelope.body) ?? e.code;
         return `${message}\nHTTP ${envelope.httpStatus}\n${json}`;
