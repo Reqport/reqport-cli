@@ -346,7 +346,11 @@ export async function performRespond(
     };
   }
 
-  // Generic responder path.
+  // Generic responder path — the same POST /v1/requests/{id}/response contract
+  // the ruleset evaluates. Structured fields the caller supplied (accounts,
+  // pre-sealed payload, inline camt statement) are forwarded so vanta can
+  // reject them (400 ARM_INFORMATION_STRUCTURED_FIELDS on an information
+  // answer). They are not dropped and not turned into a local HOLD.
   const status =
     input.status ??
     (input.hasRelationship === true
@@ -354,11 +358,6 @@ export async function performRespond(
       : input.hasRelationship === false
         ? "NFOU"
         : undefined);
-  if (!status) {
-    throw new Error(
-      "Pass --status COMP or --status NFOU for this request type."
-    );
-  }
   const items = [] as NonNullable<Parameters<typeof client.submitResponse>[1]["items"]>;
   if (input.freeText) {
     items.push({ mode: "unstructured", freeText: input.freeText });
@@ -369,23 +368,46 @@ export async function performRespond(
       document: { docType: "ATTACHMENT", payloadId: input.payloadId },
     });
   }
+  const hasStructuredField =
+    items.some((item) => item.mode === "structured") ||
+    (input.accounts?.length ?? 0) > 0 ||
+    input.statement !== undefined;
+  // Ordinary answers still need an auth.002 status. Structured fields are
+  // forwarded even without one, so an information answer can reach vanta's
+  // 400 ARM_INFORMATION_STRUCTURED_FIELDS instead of dying in the client.
+  if (!status && !hasStructuredField) {
+    throw new Error(
+      "Pass --status COMP or --status NFOU for this request type."
+    );
+  }
   const submission = {
-    status,
+    ...(status ? { status } : {}),
     items,
     ...(input.note ? { note: input.note } : {}),
     ...(input.accounts && input.accounts.length > 0 ? { accounts: input.accounts } : {}),
+    ...(input.statement !== undefined ? { statement: input.statement } : {}),
   };
-  if (status === "COMP" && items.length === 0 && (!input.accounts || input.accounts.length === 0)) {
+  if (
+    status === "COMP" &&
+    items.length === 0 &&
+    (input.accounts?.length ?? 0) === 0 &&
+    input.statement === undefined
+  ) {
     throw new Error(
       "A COMP response must carry at least one item (--free-text or --payload-id) or a disclosed --account."
     );
   }
-  const result = await client.submitResponse(id, submission as never);
+  const result = await client.submitResponse(id, submission);
+  const submitted: Record<string, unknown> = { ...submission };
+  if (input.statement !== undefined) {
+    // The wire body carried the statement; don't echo subject data back.
+    submitted.statement = "(camt.053-CA statement)";
+  }
   return {
     endpoint: "response",
     workflowType: workflow.workflowType,
     requestId: id,
-    submitted: submission as Record<string, unknown>,
+    submitted,
     result,
   };
 }

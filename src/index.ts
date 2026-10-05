@@ -10,7 +10,8 @@
 
 import { Command } from "commander";
 import { resolveEnv } from "./env.js";
-import { explainError, err } from "./ui.js";
+import { ARM_SURFACE_BRIEF } from "./armSurface.js";
+import { explainError, err, reportCliError } from "./ui.js";
 
 const VERSION = "0.6.0";
 
@@ -38,7 +39,7 @@ async function main(): Promise<void> {
       try {
         process.exitCode = await fn();
       } catch (e) {
-        err(`Error: ${explainError(e)}`);
+        reportCliError(e, globalJson());
         process.exitCode = 1;
       }
     };
@@ -137,11 +138,17 @@ async function main(): Promise<void> {
   // later in the flow, asking a known-holder responder directly.
   const requestsCreate = requests
     .command("create")
-    .description("Create a request when you already hold the identifier (no preceding BR check)");
+    .description(
+      "Create a request when you already hold the identifier (no preceding BR check). " +
+        ARM_SURFACE_BRIEF
+    );
 
   requestsCreate
     .command("tx-history")
-    .description("Ask a known holder for a wallet/account's transaction history (camt.053-CA)")
+    .description(
+      "Ask a known holder for a wallet/account's transaction history (camt.053-CA). " +
+        "Structured create: when authorityArmEnabled is false, the server returns HTTP 403 ARM_STRUCTURED_NOT_ENABLED (steer returned unchanged)."
+    )
     .requiredOption("--wallet <identifier>", "the wallet/account you already hold")
     .option("--responder <domain>", "responder by domain (e.g. exchange.example)")
     .option("--responder-org <orgId>", "responder by org id")
@@ -177,7 +184,10 @@ async function main(): Promise<void> {
 
   requestsCreate
     .command("kyc")
-    .description("Ask a known holder for a KYC/CDD file on a subject (no preceding BR check)")
+    .description(
+      "Ask a known holder for a KYC/CDD file on a subject (no preceding BR check). " +
+        "Structured create: when authorityArmEnabled is false, the server returns HTTP 403 ARM_STRUCTURED_NOT_ENABLED (steer returned unchanged)."
+    )
     .option("--responder <domain>", "responder by domain")
     .option("--responder-org <orgId>", "responder by org id")
     .option("--personnummer <pnr>", "subject personnummer")
@@ -203,7 +213,10 @@ async function main(): Promise<void> {
 
   requestsCreate
     .command("information")
-    .description("Ask a known holder, in free text, for something beyond the structured checks")
+    .description(
+      "Ask a known holder, in free text, for something beyond the structured checks. " +
+        "Free-text stays available when authorityArmEnabled is false and does not return ARM_STRUCTURED_NOT_ENABLED."
+    )
     .requiredOption("--request <text>", "the free-text ask")
     .option("--responder <domain>", "responder by domain")
     .option("--responder-org <orgId>", "responder by org id")
@@ -230,7 +243,7 @@ async function main(): Promise<void> {
   requestsCreate
     .command("free-text")
     .description(
-      "Create a graph-native free-text authority request — a plain-language ask that produces an UnstructuredData response (subject-anchored edge.information.v1 when a subject is attached, else sourceless edge.general-information.v1); the going-forward free-text member of the request family (supersedes AUTHORITY_REQUEST_V1 / UNSTRUCTURED_AUTHORITY_REQUEST_V1)"
+      "Create a graph-native free-text authority request — a plain-language ask that produces an UnstructuredData response (subject-anchored edge.information.v1 when a subject is attached, else sourceless edge.general-information.v1); the going-forward free-text member of the request family (supersedes AUTHORITY_REQUEST_V1 / UNSTRUCTURED_AUTHORITY_REQUEST_V1). Free-text stays available when authorityArmEnabled is false and does not return ARM_STRUCTURED_NOT_ENABLED."
     )
     .requiredOption("--request <text>", "the free-text ask")
     .option("--responder <domain>", "responder by domain")
@@ -258,7 +271,9 @@ async function main(): Promise<void> {
   // ── respond ───────────────────────────────────────────────────────────────
   program
     .command("respond <id>")
-    .description("Answer a request (auto-detects business-relationship vs generic)")
+    .description(
+      "Answer a request (auto-detects business-relationship vs generic). " + ARM_SURFACE_BRIEF
+    )
     .option("--has-relationship <bool>", "business-relationship answer: true | false")
     .option("--status <status>", "generic response status: COMP | NFOU")
     .option(
@@ -302,7 +317,10 @@ async function main(): Promise<void> {
   // ── pending (human-in-the-loop approval queue) ─────────────────────────────
   const pending = program
     .command("pending")
-    .description("Human-in-the-loop queue for held responder answers (approve / reject / withdraw)");
+    .description(
+      "Human-in-the-loop queue for answers the server held. Approve/reject call the server; they do not release an answer the ruleset would still hold or decline. " +
+        ARM_SURFACE_BRIEF
+    );
 
   pending
     .command("list")
@@ -316,7 +334,9 @@ async function main(): Promise<void> {
 
   pending
     .command("approve <id>")
-    .description("Release a held response — seal + send happens server-side")
+    .description(
+      "Ask the server to release a held response (POST /v1/responses/pending/{id}/approve). Seal + send happen only if the server releases it."
+    )
     .option("-y, --yes", "skip the confirmation prompt", false)
     .action((id, opts) =>
       wrap(async () => {
@@ -327,7 +347,9 @@ async function main(): Promise<void> {
 
   pending
     .command("reject <id>")
-    .description("Reject a held response")
+    .description(
+      "Reject a held response (POST /v1/responses/pending/{id}/reject). A ruleset reject-steer body is returned unchanged."
+    )
     .option("--reason <text>", "optional reason for the rejection")
     .option("-y, --yes", "skip the confirmation prompt", false)
     .action((id, opts) =>

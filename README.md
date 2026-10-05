@@ -153,6 +153,27 @@ minimisation). Valid values (exact): `CUSTOMER`, `ACCOUNT_HOLDER`,
 `BENEFICIAL_OWNER`, `AUTHORISED_REPRESENTATIVE`, `COUNTERPARTY`,
 `FORMER_CUSTOMER`, `OTHER`.
 
+### ARM on / ARM off
+
+The CLI and MCP server are thin clients. Release, hold, and decline are decided
+by the server ruleset on the same contract as `POST /v1/requests/{id}/response`.
+`qp respond`, `reqport_respond`, `reqport_respond_business_relationship`, and
+`qp pending approve|reject` do not release an answer the ruleset would hold or
+decline.
+
+When `authorityArmEnabled` is false:
+
+- Free-text create and respond stay available. They do not return
+  `ARM_STRUCTURED_NOT_ENABLED`.
+- Structured create and respond return **HTTP 403** `ARM_STRUCTURED_NOT_ENABLED`.
+- Accounts, an inline statement, or camt posted on an information answer return
+  **HTTP 400** `ARM_INFORMATION_STRUCTURED_FIELDS`, with `rejectedFields`.
+
+Both errors use the server steer: family `ARM`, use free-text or enable, discovery
+`GET arm-status`. `qp --json` and MCP tool errors print that body unchanged
+(HTTP status beside it). The same shape is how a ruleset reject-steer is shown.
+`qp arm` prints this surface. Keys are never written to output or logs.
+
 ### Approval (human-in-the-loop)
 
 An org can require that some (or all) response types are **approved by a human**

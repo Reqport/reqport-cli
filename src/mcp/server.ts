@@ -15,7 +15,7 @@ import { z } from "zod";
 import { readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 
-import { ReqportClient } from "../client.js";
+import { ReqportApiError, ReqportClient } from "../client.js";
 import { readApiKey, resolveEnv, type ReqportEnv } from "../env.js";
 import {
   decodePayloads,
@@ -35,7 +35,8 @@ import {
   readFirCase,
   readKycResponse,
 } from "../core.js";
-import { explainError } from "../ui.js";
+import { ARM_SURFACE_BRIEF } from "../armSurface.js";
+import { apiErrorEnvelope, explainError } from "../ui.js";
 import {
   FIR_ABOUT_PARTIES,
   FIR_IDENTITY_RECORD_STATUSES,
@@ -101,10 +102,32 @@ function ok(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
 }
 function fail(e: unknown) {
+  // Coded API errors (ARM 400/403, ruleset reject-steer) are the vanta envelope.
+  // Do not wrap them in a scope hint or a HOLD success.
+  const text =
+    e instanceof ReqportApiError && e.code
+      ? JSON.stringify(apiErrorEnvelope(e), null, 2)
+      : explainError(e);
   return {
     isError: true,
-    content: [{ type: "text" as const, text: explainError(e) }],
+    content: [{ type: "text" as const, text }],
   };
+}
+
+/**
+ * Shared MCP tool body: call vanta, return the result, or the server error
+ * envelope. Answer/create/pending tools go through this so tests hit the same
+ * path as the registered tools.
+ */
+export async function executeTool<T>(
+  env: string | undefined,
+  fn: (client: ReqportClient) => Promise<T>
+) {
+  try {
+    return ok(await fn(clientFor(env)));
+  } catch (e) {
+    return fail(e);
+  }
 }
 
 export async function runMcpServer(defaultEnv?: string): Promise<void> {
@@ -224,7 +247,8 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
     {
       title: "Answer a business-relationship check",
       description:
-        "Answer an Engagemangskontroll. hasRelationship=false → auth.002 NFOU (no data). true → auth.002 COMP; disclose accounts (sealed server-side in the TEE) and/or a pre-sealed payloadId.",
+        "Answer an Engagemangskontroll via POST /v1/requests/{id}/business-relationship-response (same ruleset contract as POST /v1/requests/{id}/response). hasRelationship=false → auth.002 NFOU (no data). true → auth.002 COMP; disclose accounts (sealed server-side in the TEE) and/or a pre-sealed payloadId. " +
+        ARM_SURFACE_BRIEF,
       inputSchema: {
         env: envSchema,
         id: z.string().describe("Request id."),
@@ -235,20 +259,16 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
         payloadId: z.string().optional().describe("A pre-sealed BUSINESS_RELATIONSHIP_JSON answer document."),
       },
     },
-    async ({ env, id, hasRelationship, accounts, relationshipTypes, note, payloadId }) => {
-      try {
-        const outcome = await performRespond(clientFor(env ?? defaultEnv), id, {
+    async ({ env, id, hasRelationship, accounts, relationshipTypes, note, payloadId }) =>
+      executeTool(env ?? defaultEnv, (client) =>
+        performRespond(client, id, {
           hasRelationship,
           accounts: accounts as AccountInstrument[] | undefined,
           relationshipTypes: relationshipTypes as RelationshipType[] | undefined,
           note,
           payloadId,
-        });
-        return ok(outcome);
-      } catch (e) {
-        return fail(e);
-      }
-    }
+        })
+      )
   );
 
   server.registerTool(
@@ -256,7 +276,8 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
     {
       title: "Answer a crypto transaction-history request",
       description:
-        "Answer a TRANSACTION_HISTORY_CHECK with a camt.053-CA Crypto-Asset Statement. Pass the full statement as a JSON object; Vanta validates it against the CAMT053_CA_JSON schema and seals it server-side in the TEE (no client crypto).",
+        "Answer a TRANSACTION_HISTORY_CHECK with a camt.053-CA Crypto-Asset Statement. Pass the full statement as a JSON object; Vanta validates it against the CAMT053_CA_JSON schema and seals it server-side in the TEE (no client crypto). On an information request the statement is posted to POST /v1/requests/{id}/response so the server can return HTTP 400 ARM_INFORMATION_STRUCTURED_FIELDS. " +
+        ARM_SURFACE_BRIEF,
       inputSchema: {
         env: envSchema,
         id: z.string().describe("Request id."),
@@ -266,17 +287,10 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
         note: z.string().optional(),
       },
     },
-    async ({ env, id, statement, note }) => {
-      try {
-        const outcome = await performRespond(clientFor(env ?? defaultEnv), id, {
-          statement,
-          note,
-        });
-        return ok(outcome);
-      } catch (e) {
-        return fail(e);
-      }
-    }
+    async ({ env, id, statement, note }) =>
+      executeTool(env ?? defaultEnv, (client) =>
+        performRespond(client, id, { statement, note })
+      )
   );
 
   server.registerTool(
@@ -284,7 +298,8 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
     {
       title: "Answer a generic request",
       description:
-        "Submit a generic responder answer via POST /v1/requests/{id}/response. status COMP or NFOU; optional freeText, disclosed accounts, or a pre-sealed payloadId (structured item).",
+        "Submit a generic responder answer via POST /v1/requests/{id}/response. status COMP or NFOU; optional freeText, disclosed accounts, or a pre-sealed payloadId (structured item). Free-text on an information request stays available when ARM is off. Accounts or a structured item on that answer are forwarded for the server's HTTP 400 ARM_INFORMATION_STRUCTURED_FIELDS. " +
+        ARM_SURFACE_BRIEF,
       inputSchema: {
         env: envSchema,
         id: z.string(),
@@ -295,20 +310,16 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
         payloadId: z.string().optional(),
       },
     },
-    async ({ env, id, status, freeText, accounts, note, payloadId }) => {
-      try {
-        const outcome = await performRespond(clientFor(env ?? defaultEnv), id, {
+    async ({ env, id, status, freeText, accounts, note, payloadId }) =>
+      executeTool(env ?? defaultEnv, (client) =>
+        performRespond(client, id, {
           status,
           freeText,
           accounts: accounts as AccountInstrument[] | undefined,
           note,
           payloadId,
-        });
-        return ok(outcome);
-      } catch (e) {
-        return fail(e);
-      }
-    }
+        })
+      )
   );
 
   // ── Create (requester / authority side — identifier-first, no BR check) ─────
@@ -318,7 +329,8 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
     {
       title: "Create a transaction-history request (identifier-first)",
       description:
-        "Ask a KNOWN-HOLDER responder for a wallet/account's transaction history, when you ALREADY hold the identifier and start later in the flow — no preceding business-relationship check. POST /v1/requests/transaction-history; server-sealed in the TEE (no client crypto). Needs an authority key (scope authority:write). Give exactly one of responderDomain / responderOrgId.",
+        "Ask a KNOWN-HOLDER responder for a wallet/account's transaction history, when you ALREADY hold the identifier and start later in the flow — no preceding business-relationship check. POST /v1/requests/transaction-history; server-sealed in the TEE (no client crypto). Needs an authority key (scope authority:write). Give exactly one of responderDomain / responderOrgId. Structured create: authorityArmEnabled false → HTTP 403 ARM_STRUCTURED_NOT_ENABLED, body unchanged. " +
+        ARM_SURFACE_BRIEF,
       inputSchema: {
         env: envSchema,
         responderDomain: z.string().optional().describe("Responder by domain, e.g. exchange.example."),
@@ -335,13 +347,8 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
         subjectOrgNr: z.string().optional().describe("Optional subject org.nr (sealed)."),
       },
     },
-    async ({ env, ...body }) => {
-      try {
-        return ok(await clientFor(env ?? defaultEnv).createDirectTransactionHistory(body));
-      } catch (e) {
-        return fail(e);
-      }
-    }
+    async ({ env, ...body }) =>
+      executeTool(env ?? defaultEnv, (client) => client.createDirectTransactionHistory(body))
   );
 
   server.registerTool(
@@ -349,7 +356,8 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
     {
       title: "Create a KYC/CDD request (identifier-first)",
       description:
-        "Ask a KNOWN-HOLDER responder for a KYC/CDD file on a subject, with no preceding business-relationship check. POST /v1/requests/kyc; server-sealed in the TEE. Needs an authority key (scope authority:write). Give exactly one of responderDomain / responderOrgId and exactly one of subjectPersonnummer / subjectOrgNr.",
+        "Ask a KNOWN-HOLDER responder for a KYC/CDD file on a subject, with no preceding business-relationship check. POST /v1/requests/kyc; server-sealed in the TEE. Needs an authority key (scope authority:write). Give exactly one of responderDomain / responderOrgId and exactly one of subjectPersonnummer / subjectOrgNr. Structured create: authorityArmEnabled false → HTTP 403 ARM_STRUCTURED_NOT_ENABLED, body unchanged. " +
+        ARM_SURFACE_BRIEF,
       inputSchema: {
         env: envSchema,
         responderDomain: z.string().optional(),
@@ -361,13 +369,8 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
         message: z.string().optional(),
       },
     },
-    async ({ env, ...body }) => {
-      try {
-        return ok(await clientFor(env ?? defaultEnv).createDirectKyc(body));
-      } catch (e) {
-        return fail(e);
-      }
-    }
+    async ({ env, ...body }) =>
+      executeTool(env ?? defaultEnv, (client) => client.createDirectKyc(body))
   );
 
   server.registerTool(
@@ -375,7 +378,7 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
     {
       title: "Create a free-text information request (identifier-first)",
       description:
-        "Ask a KNOWN-HOLDER responder, in FREE TEXT, for something that isn't a structured transaction-history or KYC check — with no preceding business-relationship check. POST /v1/requests/information; server-sealed in the TEE. The responder answers on the generic response path. Needs an authority key (scope authority:write). Give exactly one of responderDomain / responderOrgId.",
+        "Ask a KNOWN-HOLDER responder, in FREE TEXT, for something that isn't a structured transaction-history or KYC check — with no preceding business-relationship check. POST /v1/requests/information; server-sealed in the TEE. The responder answers on the generic response path. Needs an authority key (scope authority:write). Give exactly one of responderDomain / responderOrgId. Free-text stays available when authorityArmEnabled is false and does not return ARM_STRUCTURED_NOT_ENABLED.",
       inputSchema: {
         env: envSchema,
         responderDomain: z.string().optional(),
@@ -387,13 +390,8 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
         subjectOrgNr: z.string().optional().describe("Optional subject org.nr (sealed)."),
       },
     },
-    async ({ env, ...body }) => {
-      try {
-        return ok(await clientFor(env ?? defaultEnv).createDirectInformation(body));
-      } catch (e) {
-        return fail(e);
-      }
-    }
+    async ({ env, ...body }) =>
+      executeTool(env ?? defaultEnv, (client) => client.createDirectInformation(body))
   );
 
   server.registerTool(
@@ -401,7 +399,7 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
     {
       title: "Create a free-text authority request (One Request Family)",
       description:
-        "Create the GOING-FORWARD free-text authority request: an authority-gated ask stated in FREE TEXT, for when no structured profile (business-relationship-check, transaction-history, kyc) is the right shape. It is a graph-native ask that produces an UnstructuredData response: vanta dual-writes it to edge.information.v1 (subject-anchored — a person/org node → UnstructuredData) when a subject is attached, else to the sourceless edge.general-information.v1. Supersedes and decommissions the legacy AUTHORITY_REQUEST_V1 / UNSTRUCTURED_AUTHORITY_REQUEST_V1 workflow types. The responder answers on the generic response path with a free-text / UnstructuredData response. Server-sealed in the TEE. Needs an authority key (scope authority:write). Give exactly one of responderDomain / responderOrgId.",
+        "Create the GOING-FORWARD free-text authority request: an authority-gated ask stated in FREE TEXT, for when no structured profile (business-relationship-check, transaction-history, kyc) is the right shape. It is a graph-native ask that produces an UnstructuredData response: vanta dual-writes it to edge.information.v1 (subject-anchored — a person/org node → UnstructuredData) when a subject is attached, else to the sourceless edge.general-information.v1. Supersedes and decommissions the legacy AUTHORITY_REQUEST_V1 / UNSTRUCTURED_AUTHORITY_REQUEST_V1 workflow types. The responder answers on the generic response path with a free-text / UnstructuredData response. Server-sealed in the TEE. Needs an authority key (scope authority:write). Give exactly one of responderDomain / responderOrgId. Free-text stays available when authorityArmEnabled is false and does not return ARM_STRUCTURED_NOT_ENABLED.",
       inputSchema: {
         env: envSchema,
         responderDomain: z.string().optional(),
@@ -413,13 +411,8 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
         subjectOrgNr: z.string().optional().describe("Optional subject org.nr (sealed)."),
       },
     },
-    async ({ env, ...body }) => {
-      try {
-        return ok(await clientFor(env ?? defaultEnv).createDirectInformation(body));
-      } catch (e) {
-        return fail(e);
-      }
-    }
+    async ({ env, ...body }) =>
+      executeTool(env ?? defaultEnv, (client) => client.createDirectInformation(body))
   );
 
   // ── Multi-org chat ─────────────────────────────────────────────────────────
@@ -627,7 +620,7 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
     {
       title: "List held responses",
       description:
-        "List this org's responses held for approval via GET /v1/responses/pending (scope responses:read). Returns id, requestId, responseType, auth002Status, submitter, createdAt.",
+        "List this org's responses held for approval via GET /v1/responses/pending (scope responses:read). Returns id, requestId, responseType, auth002Status, submitter, createdAt. A hold is the server's decision; this tool does not release it.",
       inputSchema: { env: envSchema },
     },
     async ({ env }) => {
@@ -644,16 +637,12 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
     {
       title: "Approve a held response",
       description:
-        "Release a held response via POST /v1/responses/pending/{id}/approve (scope responses:write). The seal + send happens server-side. Irreversible.",
+        "Ask the server to release a held response via POST /v1/responses/pending/{id}/approve (scope responses:write). Seal + send happen only when the server releases it. A ruleset HOLD or decline, or HTTP 403 ARM_STRUCTURED_NOT_ENABLED, is returned unchanged — never turned into a local release. Irreversible when the server releases. " +
+        ARM_SURFACE_BRIEF,
       inputSchema: { env: envSchema, id: z.string().describe("Pending response id.") },
     },
-    async ({ env, id }) => {
-      try {
-        return ok(await clientFor(env ?? defaultEnv).approvePendingResponse(id));
-      } catch (e) {
-        return fail(e);
-      }
-    }
+    async ({ env, id }) =>
+      executeTool(env ?? defaultEnv, (client) => client.approvePendingResponse(id))
   );
 
   server.registerTool(
@@ -661,20 +650,15 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
     {
       title: "Reject a held response",
       description:
-        "Reject a held response via POST /v1/responses/pending/{id}/reject (scope responses:write), optionally with a reason.",
+        "Reject a held response via POST /v1/responses/pending/{id}/reject (scope responses:write), optionally with a reason. A reject-steer body from the server is returned unchanged.",
       inputSchema: {
         env: envSchema,
         id: z.string().describe("Pending response id."),
         reason: z.string().optional(),
       },
     },
-    async ({ env, id, reason }) => {
-      try {
-        return ok(await clientFor(env ?? defaultEnv).rejectPendingResponse(id, reason));
-      } catch (e) {
-        return fail(e);
-      }
-    }
+    async ({ env, id, reason }) =>
+      executeTool(env ?? defaultEnv, (client) => client.rejectPendingResponse(id, reason))
   );
 
   server.registerTool(
@@ -1251,7 +1235,8 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
     {
       title: "Answer a KYC/CDD request",
       description:
-        "Answer a KYC / CDD request via POST /v1/requests/{requestId}/kyc-response. MANDATORY record_status: FOUND (→ auth.002 COMP) | NOT_FOUND (→ NFOU). Supply the CDD record EITHER inline as `record` (snake_case; server-sealed per-party) OR as a pre-sealed content-blind `payloadId` (a KYC_CDD_JSON document) — not both. A CDD record carries PII; if your org's approval policy gates KYC, an inline record is rejected and you must use the pre-sealed payloadId form. The request BODY is snake_case. Needs scope responses:write.",
+        "Answer a KYC / CDD request via POST /v1/requests/{requestId}/kyc-response (same ruleset contract as POST /v1/requests/{id}/response). MANDATORY record_status: FOUND (→ auth.002 COMP) | NOT_FOUND (→ NFOU). Supply the CDD record EITHER inline as `record` (snake_case; server-sealed per-party) OR as a pre-sealed content-blind `payloadId` (a KYC_CDD_JSON document) — not both. A CDD record carries PII; if your org's approval policy gates KYC, an inline record is rejected and you must use the pre-sealed payloadId form. The request BODY is snake_case. Needs scope responses:write. Structured respond: authorityArmEnabled false → HTTP 403 ARM_STRUCTURED_NOT_ENABLED, body unchanged. " +
+        ARM_SURFACE_BRIEF,
       inputSchema: {
         env: envSchema,
         requestId: z.string(),

@@ -79,18 +79,75 @@ export type ReqportClientOptions = {
   baseUrl?: string;
 };
 
-/** A structured API error carrying the HTTP status and any server error body. */
+/** A structured API error carrying the HTTP status and the server body, unchanged. */
 export class ReqportApiError extends Error {
   readonly status: number;
+  /**
+   * Response body text from vanta. Fields are preserved; an `rqk_live_` key or
+   * Authorization value is redacted so it cannot reach output or logs.
+   */
   readonly body: string;
   readonly path: string;
+  /**
+   * JSON-parsed body when the server sent JSON. Not rewritten into another
+   * code or a HOLD result. Secret-shaped strings are redacted.
+   */
+  readonly parsedBody: unknown;
   constructor(status: number, path: string, body: string, message?: string) {
-    super(message ?? `Vanta ${status} on ${path}${body ? `: ${body}` : ""}`);
+    const safeBody = redactSecrets(body);
+    super(message ?? `Vanta ${status} on ${path}${safeBody ? `: ${safeBody}` : ""}`);
     this.name = "ReqportApiError";
     this.status = status;
     this.path = path;
-    this.body = body;
+    this.body = safeBody;
+    const parsed = parseErrorBody(body);
+    this.parsedBody = parsed === undefined ? undefined : redactValue(parsed);
   }
+
+  /** Stable machine code when the body carries `code`, `error`, or `errorCode`. */
+  get code(): string | undefined {
+    return stableErrorCode(this.parsedBody);
+  }
+}
+
+const SECRET_KEY = /rqk_live_[A-Za-z0-9_-]+/g;
+const BEARER = /Bearer\s+\S+/gi;
+
+/** Strip API keys and bearer tokens from a string. Idempotent. */
+export function redactSecrets(s: string): string {
+  return s.replace(SECRET_KEY, "[redacted]").replace(BEARER, "Bearer [redacted]");
+}
+
+function redactValue(value: unknown): unknown {
+  if (typeof value === "string") return redactSecrets(value);
+  if (Array.isArray(value)) return value.map(redactValue);
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = redactValue(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+function parseErrorBody(body: string): unknown {
+  const trimmed = body.trim();
+  if (!trimmed) return undefined;
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function stableErrorCode(parsed: unknown): string | undefined {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+  const rec = parsed as Record<string, unknown>;
+  if (typeof rec.code === "string" && rec.code) return rec.code;
+  if (typeof rec.error === "string" && rec.error) return rec.error;
+  if (typeof rec.errorCode === "string" && rec.errorCode) return rec.errorCode;
+  return undefined;
 }
 
 export class ReqportClient {
@@ -147,6 +204,8 @@ export class ReqportClient {
     }
 
     if (!res.ok) {
+      // 400/403 (and any other error) propagate with the body vanta sent.
+      // Do not map them onto HOLD, a synthetic code, or a success result.
       const body = await res.text().catch(() => "");
       throw new ReqportApiError(res.status, path, body);
     }

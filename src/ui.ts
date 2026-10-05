@@ -4,7 +4,38 @@
  */
 
 import { createInterface } from "node:readline/promises";
-import { ReqportApiError } from "./client.js";
+import { redactSecrets, ReqportApiError } from "./client.js";
+
+function redactValue(value: unknown): unknown {
+  if (typeof value === "string") return redactSecrets(value);
+  if (Array.isArray(value)) return value.map(redactValue);
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = redactValue(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Machine envelope for a vanta error. `body` is the parsed JSON object when the
+ * server sent JSON (same fields, including steer / rejectedFields / family),
+ * otherwise the raw text. HTTP status is alongside the body, not a replacement.
+ */
+export function apiErrorEnvelope(e: ReqportApiError): {
+  httpStatus: number;
+  path: string;
+  body: unknown;
+} {
+  const body = e.parsedBody !== undefined ? e.parsedBody : e.body;
+  return {
+    httpStatus: e.status,
+    path: redactSecrets(e.path),
+    body: redactValue(body),
+  };
+}
 
 /**
  * Ask a yes/no question on an interactive TTY. Returns the user's answer. The
@@ -40,9 +71,19 @@ export function table(headers: string[], rows: string[][]): string {
   return [fmt(headers), sep, ...rows.map(fmt)].join("\n");
 }
 
-/** Turn any thrown value into a friendly, actionable message. */
+/**
+ * Turn any thrown value into a message safe to print.
+ *
+ * A body that carries a stable `code` (ARM_STRUCTURED_NOT_ENABLED,
+ * ARM_INFORMATION_STRUCTURED_FIELDS, ruleset reject-steer, …) is rendered as
+ * HTTP status plus that JSON. It is not rewritten as a scope error or as HOLD.
+ */
 export function explainError(e: unknown): string {
   if (e instanceof ReqportApiError) {
+    if (e.code) {
+      const envelope = apiErrorEnvelope(e);
+      return `HTTP ${envelope.httpStatus}\n${JSON.stringify(envelope.body, null, 2)}`;
+    }
     const hint =
       e.status === 401
         ? " — check REQPORT_API_KEY is a valid rqk_live_ key for this --env."
@@ -53,8 +94,20 @@ export function explainError(e: unknown): string {
             : e.status === 503
               ? " — service says the operation is unavailable in this environment."
               : "";
-    const body = e.body ? ` ${e.body}` : "";
-    return `HTTP ${e.status} on ${e.path}${hint}${body}`;
+    const body = e.body ? ` ${redactSecrets(e.body)}` : "";
+    return redactSecrets(`HTTP ${e.status} on ${e.path}${hint}${body}`);
   }
-  return e instanceof Error ? e.message : String(e);
+  return redactSecrets(e instanceof Error ? e.message : String(e));
+}
+
+/**
+ * CLI error channel. `--json` writes the vanta envelope to stdout so a machine
+ * reader sees the server body. Human output stays on stderr.
+ */
+export function reportCliError(e: unknown, json: boolean): void {
+  if (json && e instanceof ReqportApiError) {
+    printJson(apiErrorEnvelope(e));
+    return;
+  }
+  err(`Error: ${explainError(e)}`);
 }

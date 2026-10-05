@@ -4,6 +4,7 @@
  * human-in-the-loop / auto-release decisions live. Static docs, no credential.
  */
 
+import { ARM_SURFACE_BRIEF } from "../armSurface.js";
 import { line } from "../ui.js";
 
 const ARM_TEXT = `ARM — Authority Request Management
@@ -60,9 +61,18 @@ ALTERNATE ENTRY — you ALREADY hold the identifier (start later in the flow)
 
 HUMAN-IN-THE-LOOP
   qp pending list                 see held answers awaiting approval
-  qp pending approve <id>         release (sealed + sent on approval)
+  qp pending approve <id>         ask the server to release (sealed + sent only if it does)
   qp pending reject <id>          decline (the authority sees the decline + reason)
-  Nothing reaches the authority until it is released.
+  Nothing reaches the authority until the server releases it.
+  Approve/reject do not override a ruleset HOLD or decline.
+
+MACHINE SURFACE (ARM on / ARM off)
+  ${ARM_SURFACE_BRIEF}
+  Free-text: qp requests create information | qp requests create free-text
+             qp respond <id> --status COMP --free-text "..."
+  Structured create/respond that the server rejects when ARM is off uses the
+  same endpoints (tx-history, kyc, business-relationship, camt statement).
+  qp --json and the MCP tools print the HTTP status and the server JSON body.
 
 The rendered sequence diagram is in the developer docs (/developer) and in the
 reqport-responder skill (SKILL.md).`;

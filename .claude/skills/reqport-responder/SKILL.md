@@ -141,6 +141,14 @@ Key points:
   holds an unknown wallet is holder-discovery — a separate capability.)
 - Nothing reaches the authority until it is **released** (auto or human-approved);
   a decline returns to the authority with a reason.
+- The CLI and MCP tools do not decide that release. A ruleset HOLD or decline
+  comes back as the server sent it (including a reject-steer body). When
+  `authorityArmEnabled` is false, free-text create/respond stay available;
+  structured create/respond return HTTP **403** `ARM_STRUCTURED_NOT_ENABLED`.
+  Accounts, an inline statement, or camt on an information answer return HTTP
+  **400** `ARM_INFORMATION_STRUCTURED_FIELDS` (`rejectedFields` plus the ARM
+  steer: family ARM, use free-text or enable, discovery GET arm-status). Do not
+  remap either code to HOLD.
 
 ## The loop
 
