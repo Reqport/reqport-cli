@@ -4,6 +4,7 @@
  */
 
 import { createInterface } from "node:readline/promises";
+import { isArmReleaseErrorCode } from "./armSurface.js";
 import { redactSecrets, ReqportApiError } from "./client.js";
 
 function redactValue(value: unknown): unknown {
@@ -78,11 +79,24 @@ export function table(headers: string[], rows: string[][]): string {
  * ARM_INFORMATION_STRUCTURED_FIELDS, ruleset reject-steer, …) is rendered as
  * HTTP status plus that JSON. It is not rewritten as a scope error or as HOLD.
  */
+function contractMessage(body: unknown): string | undefined {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
+  const message = (body as { message?: unknown }).message;
+  return typeof message === "string" && message.trim() ? message.trim() : undefined;
+}
+
 export function explainError(e: unknown): string {
   if (e instanceof ReqportApiError) {
     if (e.code) {
       const envelope = apiErrorEnvelope(e);
-      return `HTTP ${envelope.httpStatus}\n${JSON.stringify(envelope.body, null, 2)}`;
+      const json = JSON.stringify(envelope.body, null, 2);
+      // ARM release-gate refusals keep the server's contract message. They are
+      // never rewritten into a sealed-and-sent success.
+      if (isArmReleaseErrorCode(e.code)) {
+        const message = contractMessage(envelope.body) ?? e.code;
+        return `${message}\nHTTP ${envelope.httpStatus}\n${json}`;
+      }
+      return `HTTP ${envelope.httpStatus}\n${json}`;
     }
     const hint =
       e.status === 401

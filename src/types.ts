@@ -359,6 +359,39 @@ export type ResponseResult = {
   status?: string;
   itemCount?: number;
   createdAt?: string;
+  /**
+   * Present when the ruleset (or a human release) actually released the answer.
+   * Forwarded as `X-Reqport-Arm-Release-Id` on the v3 formal respond. Absent on HOLD/DECLINE.
+   */
+  releaseId?: string;
+  /** Pre-sealed response payload the formal v3 respond should bind, when the gate returns one. */
+  payloadId?: string;
+  approvalState?: string;
+  action?: string;
+  reason?: string;
+  [k: string]: unknown;
+};
+
+/**
+ * POST /v3/workflows/{workflowInstanceId}/respond — the encrypted formal respond.
+ * Payload bindings are optional; the thin client sends them only when it already
+ * has a payload id. The release id travels in the header, not this body.
+ */
+export type FormalRespondRequest = {
+  responsePayload?: {
+    payloadId: string;
+    purpose?: string;
+    attestationJws?: string;
+  };
+  nfou?: boolean;
+  correlationId?: string;
+};
+
+/** POST /v3/workflows/{id}/respond result (workflow status after the formal respond). */
+export type FormalRespondResult = {
+  workflowInstanceId?: string;
+  status?: string;
+  updatedAt?: string;
   [k: string]: unknown;
 };
 
@@ -471,6 +504,12 @@ export type PendingActionResult = {
   status?: string;
   messageId?: string;
   requestId?: string;
+  /** Set when a human approve actually releases. Forwarded on the v3 formal respond. */
+  releaseId?: string;
+  approvalState?: string;
+  action?: string;
+  reason?: string;
+  payloadId?: string;
   [k: string]: unknown;
 };
 

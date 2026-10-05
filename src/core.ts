@@ -4,6 +4,7 @@
  */
 
 import { readFile } from "node:fs/promises";
+import { releasedArmReleaseId } from "./armSurface.js";
 import { ReqportApiError, ReqportClient } from "./client.js";
 import {
   FIR_ABOUT_PARTIES,
@@ -38,6 +39,8 @@ import {
   type FirResponseOutcome,
   type FirSubmitResponseRequest,
   type FirUpdateRequest,
+  type FormalRespondRequest,
+  type FormalRespondResult,
   type KycRecordStatus,
   type KycResponseSubmission,
   type KycResponseView,
@@ -277,7 +280,47 @@ export type RespondOutcome = {
   requestId: string;
   submitted: Record<string, unknown>;
   result: ResponseResult;
+  /**
+   * Set when the gate was released and carried a releaseId, after
+   * POST /v3/workflows/{id}/respond succeeded with that id in the header.
+   */
+  formal?: FormalRespondResult;
 };
+
+/**
+ * After a ruleset gate (POST /v1/requests/{id}/response, or the typed respond
+ * that shares that contract) or a human RELEASED approve, post the v3 formal
+ * respond with `X-Reqport-Arm-Release-Id` when — and only when — the server
+ * released and returned a releaseId.
+ *
+ * HOLD and DECLINE return undefined and do not call vanta. A missing releaseId
+ * on an older released body also skips the call, so servers that do not yet
+ * emit releaseId keep the single-call path.
+ */
+export async function forwardArmRelease(
+  client: ReqportClient,
+  workflowInstanceId: string,
+  gate: {
+    status?: unknown;
+    approvalState?: unknown;
+    action?: unknown;
+    releaseId?: unknown;
+    messageId?: unknown;
+    payloadId?: unknown;
+  },
+  hints?: { nfou?: boolean; payloadId?: string }
+): Promise<FormalRespondResult | undefined> {
+  const releaseId = releasedArmReleaseId(gate);
+  if (!releaseId) return undefined;
+  const fromGate = typeof gate.payloadId === "string" ? gate.payloadId.trim() : "";
+  const payloadId = (hints?.payloadId?.trim() || fromGate) || undefined;
+  const messageId = typeof gate.messageId === "string" ? gate.messageId.trim() : "";
+  const body: FormalRespondRequest = {};
+  if (hints?.nfou) body.nfou = true;
+  if (messageId) body.correlationId = messageId;
+  if (payloadId) body.responsePayload = { payloadId, purpose: "RESPONSE" };
+  return client.respondFormalV3(workflowInstanceId, body, releaseId);
+}
 
 /**
  * Decide the endpoint from the workflow type and submit the answer. Reused by
@@ -316,12 +359,17 @@ export async function performRespond(
       }
     }
     const result = await client.submitBusinessRelationshipResponse(id, answer as never);
+    const formal = await forwardArmRelease(client, id, result, {
+      nfou: hasRelationship === false,
+      payloadId: input.payloadId,
+    });
     return {
       endpoint: "business-relationship-response",
       workflowType: workflow.workflowType,
       requestId: id,
       submitted: answer,
       result,
+      ...(formal ? { formal } : {}),
     };
   }
 
@@ -335,6 +383,7 @@ export async function performRespond(
     const answer: Record<string, unknown> = { statement: input.statement };
     if (input.note) answer.note = input.note;
     const result = await client.submitTransactionHistoryResponse(id, answer as never);
+    const formal = await forwardArmRelease(client, id, result, { payloadId: input.payloadId });
     return {
       endpoint: "transaction-history-response",
       workflowType: workflow.workflowType,
@@ -343,6 +392,7 @@ export async function performRespond(
       // and carry subject data); the server validated + sealed it.
       submitted: { statement: "(camt.053-CA statement)", ...(input.note ? { note: input.note } : {}) },
       result,
+      ...(formal ? { formal } : {}),
     };
   }
 
@@ -398,6 +448,10 @@ export async function performRespond(
     );
   }
   const result = await client.submitResponse(id, submission);
+  const formal = await forwardArmRelease(client, id, result, {
+    nfou: status === "NFOU",
+    payloadId: input.payloadId,
+  });
   const submitted: Record<string, unknown> = { ...submission };
   if (input.statement !== undefined) {
     // The wire body carried the statement; don't echo subject data back.
@@ -409,6 +463,7 @@ export async function performRespond(
     requestId: id,
     submitted,
     result,
+    ...(formal ? { formal } : {}),
   };
 }
 
@@ -847,7 +902,12 @@ export async function performKycRespond(
   if (input.payloadId) body.payload_id = input.payloadId;
   if (input.note) body.note = input.note;
 
-  return client.submitKycResponse(requestId, body);
+  const result = await client.submitKycResponse(requestId, body);
+  await forwardArmRelease(client, requestId, result, {
+    nfou: input.recordStatus === "NOT_FOUND",
+    payloadId: input.payloadId,
+  });
+  return result;
 }
 
 /** Read a KYC/CDD response (content-blind read-back). */

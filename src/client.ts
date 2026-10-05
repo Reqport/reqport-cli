@@ -16,6 +16,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { ARM_RELEASE_ID_HEADER } from "./armSurface.js";
 import { resolveBaseUrl, type ReqportEnv } from "./env.js";
 import type {
   AffordanceListResponse,
@@ -46,6 +47,8 @@ import type {
   FirRefundInstructionRequest,
   FirSubmitResponseRequest,
   FirUpdateRequest,
+  FormalRespondRequest,
+  FormalRespondResult,
   KycResponseSubmission,
   KycResponseView,
   ListRequestsResponse,
@@ -453,6 +456,33 @@ export class ReqportClient {
     return this.request<ResponseResult>(
       `/v1/requests/${encodeURIComponent(id)}/response`,
       { method: "POST", idempotent: true, body: JSON.stringify(submission) }
+    );
+  }
+
+  /**
+   * POST /v3/workflows/{id}/respond — the encrypted formal respond.
+   *
+   * Vanta requires `X-Reqport-Arm-Release-Id` on this call. The id is the one
+   * captured from a released `POST /v1/requests/{id}/response` (or a human
+   * RELEASED approve). Callers must not invoke this for HOLD or DECLINE.
+   */
+  respondFormalV3(
+    workflowInstanceId: string,
+    body: FormalRespondRequest,
+    releaseId: string
+  ): Promise<FormalRespondResult> {
+    const id = releaseId.trim();
+    if (!id) {
+      throw new Error("Formal respond requires an ARM release id.");
+    }
+    return this.request<FormalRespondResult>(
+      `/v3/workflows/${encodeURIComponent(workflowInstanceId)}/respond`,
+      {
+        method: "POST",
+        idempotent: true,
+        headers: { [ARM_RELEASE_ID_HEADER]: id },
+        body: JSON.stringify(body),
+      }
     );
   }
 
