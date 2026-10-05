@@ -18,21 +18,37 @@ export const ARM_SURFACE_BRIEF =
 export type ServerDecision = "released" | "held" | "declined" | "unspecified";
 
 /**
- * Read the server's own status / approvalState / action. HOLD and decline win
- * over any release word so a mixed body cannot be framed as sent.
+ * Server enums this client already speaks. Match is exact (case-sensitive),
+ * so NOT_SENT is not SENT and UNRELEASED is not a release.
+ *
+ * Held wins over decline, and decline wins over release, when a body carries
+ * more than one of these tokens.
+ */
+const HELD_STATES: ReadonlySet<string> = new Set(["HOLD_FOR_APPROVAL", "PENDING_APPROVAL"]);
+const DECLINED_STATES: ReadonlySet<string> = new Set(["DECLINE", "DECLINED", "RESPONSE_DECLINED"]);
+const RELEASED_STATES: ReadonlySet<string> = new Set(["AUTO_RELEASE", "RESPONDED"]);
+
+function enumToken(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const token = value.trim();
+  return token === "" ? undefined : token;
+}
+
+/**
+ * Read the server's own status / approvalState / action. Anything that is not
+ * one of the enums above is unspecified — this function does not guess.
  */
 export function serverDecision(result: {
   status?: unknown;
   approvalState?: unknown;
   action?: unknown;
 }): ServerDecision {
-  const status = typeof result.status === "string" ? result.status : "";
-  const approval = typeof result.approvalState === "string" ? result.approvalState : "";
-  const action = typeof result.action === "string" ? result.action : "";
-  const blob = `${status} ${approval} ${action}`.toUpperCase();
-  if (blob.trim() === "") return "unspecified";
-  if (/(DECLIN|REJECT)/.test(blob)) return "declined";
-  if (/(HOLD|PENDING)/.test(blob)) return "held";
-  if (/(AUTO_RELEASE|RELEASED|APPROVED|SENT|SEALED|RESPONDED)/.test(blob)) return "released";
+  const tokens = [enumToken(result.status), enumToken(result.approvalState), enumToken(result.action)].filter(
+    (token): token is string => token !== undefined
+  );
+  if (tokens.length === 0) return "unspecified";
+  if (tokens.some((token) => HELD_STATES.has(token))) return "held";
+  if (tokens.some((token) => DECLINED_STATES.has(token))) return "declined";
+  if (tokens.some((token) => RELEASED_STATES.has(token))) return "released";
   return "unspecified";
 }

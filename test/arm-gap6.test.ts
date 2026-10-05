@@ -17,6 +17,7 @@ import { runRespond } from "../src/commands/respond.js";
 import { runPendingApprove, runPendingReject } from "../src/commands/pending.js";
 import { runArm } from "../src/commands/arm.js";
 import { executeTool } from "../src/mcp/server.js";
+import { serverDecision } from "../src/armSurface.js";
 import { apiErrorEnvelope, explainError, reportCliError } from "../src/ui.js";
 import { cleanupConfigDir, clearEnvKnobs, freshConfigDir } from "./helpers.js";
 
@@ -298,6 +299,71 @@ describe("AC 10 — CLI and MCP do not bypass a ruleset HOLD or reject", () => {
     assertNoReleaseClaim(io.stdout());
   });
 
+  it("pending approve says sealed and sent only when the server status is released", async () => {
+    mockVanta(() => ({
+      status: 200,
+      json: { id: "pend-rel", status: "RESPONDED", approvalState: "AUTO_RELEASE" },
+    }));
+    const io = captureIo();
+    expect(await runPendingApprove("sandbox", "pend-rel", { yes: true })).toBe(0);
+    io.restore();
+    expect(io.stdout()).toMatch(/sealed and sent server-side/);
+    expect(io.stdout()).toContain("RESPONDED");
+  });
+
+  it("pending approve with an unknown or empty status prints that status and does not claim release", async () => {
+    mockVanta(() => ({ status: 200, json: { id: "pend-unk", status: "IN_REVIEW" } }));
+    const unknown = captureIo();
+    expect(await runPendingApprove("sandbox", "pend-unk", { yes: true })).toBe(0);
+    unknown.restore();
+    expect(unknown.stdout()).toContain("IN_REVIEW");
+    assertNoReleaseClaim(unknown.stdout());
+
+    mockVanta(() => ({ status: 200, json: { id: "pend-empty" } }));
+    const empty = captureIo();
+    expect(await runPendingApprove("sandbox", "pend-empty", { yes: true })).toBe(0);
+    empty.restore();
+    expect(empty.stdout()).toContain("(no status)");
+    assertNoReleaseClaim(empty.stdout());
+  });
+
+  it("NOT_SENT and UNRELEASED stay unspecified for pending approve and qp respond", async () => {
+    expect(serverDecision({ status: "NOT_SENT" })).toBe("unspecified");
+    expect(serverDecision({ status: "UNRELEASED" })).toBe("unspecified");
+    expect(serverDecision({ approvalState: "NOT_SENT" })).toBe("unspecified");
+    expect(serverDecision({ status: "RESPONDED" })).toBe("released");
+    expect(serverDecision({ action: "AUTO_RELEASE" })).toBe("released");
+    expect(serverDecision({})).toBe("unspecified");
+    expect(serverDecision({ status: "" })).toBe("unspecified");
+    expect(serverDecision({ status: "IN_REVIEW" })).toBe("unspecified");
+
+    for (const status of ["NOT_SENT", "UNRELEASED"]) {
+      mockVanta(() => ({ status: 200, json: { id: "pend-x", status } }));
+      const io = captureIo();
+      expect(await runPendingApprove("sandbox", "pend-x", { yes: true })).toBe(0);
+      io.restore();
+      expect(io.stdout()).toContain(status);
+      assertNoReleaseClaim(io.stdout());
+    }
+
+    for (const status of ["NOT_SENT", "UNRELEASED"]) {
+      const id = `req-${status.toLowerCase()}`;
+      route(id, "BUSINESS_RELATIONSHIP_CHECK_V1", {
+        includes: "/business-relationship-response",
+        status: 200,
+        json: { status },
+      });
+      const respond = captureIo();
+      expect(
+        await runRespond("sandbox", id, { hasRelationship: "false", yes: true, show: false })
+      ).toBe(0);
+      respond.restore();
+      expect(respond.stdout()).toContain(status);
+      expect(respond.stdout()).not.toContain("The server released");
+      assertNoReleaseClaim(respond.stdout());
+    }
+  });
+
   it("pending reject returns the server steer body", async () => {
     mockVanta(() => ({ status: 400, json: RULESET_REJECT }));
     const io = captureIo();
@@ -558,7 +624,7 @@ describe("help surfaces the server codes", () => {
 
   it("qp respond --help names both codes", () => {
     const res = spawnSync(process.execPath, ["--import", "tsx", "src/index.ts", "respond", "--help"], {
-      cwd: "/workspace",
+      cwd: process.cwd(),
       encoding: "utf-8",
     });
     expect(res.status).toBe(0);

@@ -153,15 +153,33 @@ function renderPendingDecision(
     if (typeof res.reason === "string" && res.reason) line(`  reason: ${res.reason}`);
     return;
   }
-  if (action === "approve" && (decision === "released" || decision === "unspecified")) {
+  if (action === "approve" && decision === "released") {
     line(`Approved held response ${shownId} — sealed and sent server-side.`);
-  } else if (action === "reject") {
+    if (res.status) line(`  status:     ${res.status}`);
+    if (res.messageId) line(`  message id: ${res.messageId}`);
+    return;
+  }
+  if (action === "approve") {
+    // unspecified / empty / unknown: the raw status only. No release claim.
+    line(`Server response for ${shownId}: ${rawStatus(res)}`);
+    if (typeof res.approvalState === "string" && res.approvalState) {
+      line(`  approval: ${res.approvalState}`);
+    }
+    if (res.messageId) line(`  message id: ${res.messageId}`);
+    return;
+  }
+  if (action === "reject") {
     line(`Rejected held response ${shownId}.`);
   } else if (action === "withdraw") {
     line(`Withdrew held response ${shownId}.`);
   } else {
-    line(`Server response for ${shownId}${res.status ? `: ${res.status}` : "."}`);
+    line(`Server response for ${shownId}: ${rawStatus(res)}`);
   }
   if (res.status) line(`  status:     ${res.status}`);
   if (res.messageId) line(`  message id: ${res.messageId}`);
+}
+
+function rawStatus(res: PendingActionResult): string {
+  if (typeof res.status !== "string" || res.status.trim() === "") return "(no status)";
+  return res.status;
 }
