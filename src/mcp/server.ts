@@ -15,7 +15,7 @@ import { z } from "zod";
 import { readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 
-import { ReqportApiError, ReqportClient } from "../client.js";
+import { redactSecrets, redactValue, ReqportApiError, ReqportClient } from "../client.js";
 import { readApiKey, resolveEnv, type ReqportEnv } from "../env.js";
 import {
   decodePayloads,
@@ -99,15 +99,16 @@ function clientFor(env?: string): ReqportClient {
 }
 
 function ok(value: unknown) {
-  return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
+  return { content: [{ type: "text" as const, text: JSON.stringify(redactValue(value), null, 2) }] };
 }
 function fail(e: unknown) {
   // Coded API errors (ARM 400/403, ruleset reject-steer) are the vanta envelope.
-  // Do not wrap them in a scope hint or a HOLD success.
+  // Do not wrap them in a scope hint or a HOLD success. Release ids in that
+  // body are the prefix or a hash; the full token stays on the request header.
   const text =
     e instanceof ReqportApiError && e.code
-      ? JSON.stringify(apiErrorEnvelope(e), null, 2)
-      : explainError(e);
+      ? JSON.stringify(redactValue(apiErrorEnvelope(e)), null, 2)
+      : redactSecrets(explainError(e));
   return {
     isError: true,
     content: [{ type: "text" as const, text }],

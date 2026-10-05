@@ -16,7 +16,8 @@ export const ARM_SURFACE_BRIEF =
   "Both carry the server steer (family ARM, use free-text or enable, discovery GET arm-status; rejectedFields on the 400). " +
   "CLI --json and MCP return that body unchanged. " +
   "A released disposition (AUTO_RELEASE or RELEASED) that includes releaseId is forwarded with the gate shape unchanged, as header X-Reqport-Arm-Release-Id on POST /v3/workflows/{id}/respond. " +
-  "That formal call is a single attempt and is not retried. HOLD and DECLINE send neither the header nor a shape. " +
+  "That formal call is a single attempt and is not retried. The full release id is sent only on that header. " +
+  "Logs, errors, JSON, and other output show the armrel_ prefix or a hash. HOLD and DECLINE send neither the header nor a shape. " +
   "ARM_RELEASE_* errors are the server message and body. ARM_RELEASE_REPLAYED means the answer was already submitted; check the request status.";
 
 /** How the server classified a 2xx response body. Never inferred locally. */
@@ -80,6 +81,11 @@ export function serverDecision(result: {
 /** Header vanta requires on the encrypted v3 formal respond. */
 export const ARM_RELEASE_ID_HEADER = "X-Reqport-Arm-Release-Id";
 
+/** Contract prefix. Output may show this. It must not show the rest of the token. */
+export const ARM_RELEASE_ID_PREFIX = "armrel_";
+
+const ARMREL_TOKEN = /armrel_[A-Za-z0-9_-]+/g;
+
 /**
  * releaseId from a gate body, only when the server decision is released.
  * HOLD, DECLINE, and unknown tokens yield undefined even if a releaseId is present.
@@ -103,9 +109,25 @@ export function isArmReleaseErrorCode(code: string | undefined): boolean {
 }
 
 /**
- * Non-reversible label for an unused release id. Error text may show this.
+ * Short hash of a release id. Used when the id has no `armrel_` prefix.
  * It must never include the full token.
  */
 export function releaseIdFingerprint(releaseId: string): string {
   return createHash("sha256").update(releaseId, "utf8").digest("hex").slice(0, 12);
+}
+
+/**
+ * Visible form of a release id. The full token is allowed only on
+ * `X-Reqport-Arm-Release-Id`. Everywhere else this is the `armrel_` prefix,
+ * or a hash when the id does not start with that prefix.
+ */
+export function displayReleaseId(releaseId: string): string {
+  const id = releaseId.trim();
+  if (id.startsWith(ARM_RELEASE_ID_PREFIX)) return ARM_RELEASE_ID_PREFIX;
+  return releaseIdFingerprint(id);
+}
+
+/** Replace any `armrel_…` token in text with the prefix. Leaves a bare `armrel_` as-is. */
+export function redactReleaseIdText(s: string): string {
+  return s.replace(ARMREL_TOKEN, (token) => displayReleaseId(token));
 }

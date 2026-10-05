@@ -19,7 +19,7 @@ import {
   type RespondInput,
 } from "../core.js";
 import type { AccountInstrument } from "../types.js";
-import { serverDecision } from "../armSurface.js";
+import { displayReleaseId, serverDecision } from "../armSurface.js";
 import { line, printJson } from "../ui.js";
 
 export type RespondCliOptions = {
@@ -167,7 +167,7 @@ export async function runRespond(
   }
   if (outcome.result.messageId) line(`  message id:    ${outcome.result.messageId}`);
   if (typeof outcome.result.releaseId === "string" && outcome.result.releaseId && outcome.formal) {
-    line(`  release id:    ${outcome.result.releaseId}`);
+    line(`  release id:    ${displayReleaseId(outcome.result.releaseId)}`);
   }
   if (decision === "held") {
     line("  Awaiting approval. Review it with `qp pending list`.");

@@ -10,34 +10,34 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ReqportApiError, ReqportClient } from "../src/client.js";
+import { redactValue, ReqportApiError, ReqportClient } from "../src/client.js";
 import { performKycRespond, performRespond } from "../src/core.js";
 import { runRespond } from "../src/commands/respond.js";
 import { runPendingApprove } from "../src/commands/pending.js";
 import { executeTool } from "../src/mcp/server.js";
-import { releasedArmReleaseId, releaseIdFingerprint, serverDecision } from "../src/armSurface.js";
-import { ARM_RELEASE_BODIES, ARM_RELEASE_CODES } from "../src/armReleaseContract.js";
+import { displayReleaseId, releasedArmReleaseId, releaseIdFingerprint, serverDecision } from "../src/armSurface.js";
 import { explainError, reportCliError } from "../src/ui.js";
+import { ARM_RELEASE_CODES, ARM_RELEASE_ID_GATE } from "./fixtures/arm-release-id-gate.js";
 import { cleanupConfigDir, clearEnvKnobs, freshConfigDir } from "./helpers.js";
 
 const API_KEY = "rqk_live_syntheticreleaseonly";
 const BASE = "https://vanta.test";
 const HEADER = "x-reqport-arm-release-id";
 
-const RELEASE_REQUIRED = ARM_RELEASE_BODIES.ARM_RELEASE_REQUIRED;
-const RELEASE_REPLAYED = ARM_RELEASE_BODIES.ARM_RELEASE_REPLAYED;
-const RELEASE_SHAPE = ARM_RELEASE_BODIES.ARM_RELEASE_SHAPE_MISMATCH;
-
-/** Real gate shape. An extra field proves the client does not rebuild slug/itemModes/presence. */
-const SHAPE = {
-  slug: "information",
-  itemModes: ["unstructured"],
-  presence: { freeText: false, accounts: false },
-  gateStamp: "synthetic-shape-1",
-};
+const SHAPE = ARM_RELEASE_ID_GATE.shape;
+const RELEASE_REQUIRED = ARM_RELEASE_ID_GATE.refusals.ARM_RELEASE_REQUIRED;
+const RELEASE_REPLAYED = ARM_RELEASE_ID_GATE.refusals.ARM_RELEASE_REPLAYED;
+const RELEASE_SHAPE = ARM_RELEASE_ID_GATE.refusals.ARM_RELEASE_SHAPE_MISMATCH;
 
 function autoRelease(releaseId: string, extra: Record<string, unknown> = {}) {
-  return { disposition: "AUTO_RELEASE", releaseId, shape: SHAPE, messageId: "msg-auto", ...extra };
+  return { ...ARM_RELEASE_ID_GATE.autoRelease, releaseId, ...extra };
+}
+
+function assertReleaseIdHidden(text: string, releaseId: string) {
+  expect(text).not.toContain(releaseId);
+  const secret = releaseId.startsWith("armrel_") ? releaseId.slice("armrel_".length) : releaseId;
+  expect(secret.length).toBeGreaterThan(0);
+  expect(text).not.toContain(secret);
 }
 
 type Call = {
@@ -149,11 +149,16 @@ describe("release id is forwarded only when the server released", () => {
     expect(releasedArmReleaseId({ action: "AUTO_RELEASE", releaseId: "rel-legacy" })).toBe("rel-legacy");
     expect(releasedArmReleaseId({ action: "auto_release", releaseId: "rel-lower" })).toBeUndefined();
     expect(releasedArmReleaseId({ disposition: "RELEASED", releaseId: "  " })).toBeUndefined();
+    expect(displayReleaseId("armrel_synthetic_01")).toBe("armrel_");
+    expect(displayReleaseId("rel-noreq-synthetic-full-token-0123456789abcdef")).toBe(
+      releaseIdFingerprint("rel-noreq-synthetic-full-token-0123456789abcdef")
+    );
+    expect(displayReleaseId("armrel_synthetic_01")).not.toContain("synthetic_01");
   });
 
   it("AUTO_RELEASE on POST /v1/requests/{id}/response sends X-Reqport-Arm-Release-Id on v3", async () => {
     const id = "req-auto";
-    const releaseId = "rel-auto-synthetic";
+    const releaseId = "armrel_synthetic_01";
     const calls = mockVanta(({ url, method }) => {
       if (method === "GET" && url.endsWith(`/v1/workflows/${id}`)) {
         return { status: 200, json: workflow(id, "INFORMATION_FOLLOWUP") };
@@ -188,14 +193,15 @@ describe("release id is forwarded only when the server released", () => {
     expect((formal?.body as { shape?: unknown }).shape).toEqual(SHAPE);
     expect(formal?.idempotencyKey).toBeUndefined();
     expect(io.stdout()).toContain("The server released this answer.");
-    expect(io.stdout()).toContain(releaseId);
+    expect(io.stdout()).toMatch(/release id:\s+armrel_\s/);
+    assertReleaseIdHidden(io.stdout(), releaseId);
     assertNoReleaseClaim(io.stdout());
     assertNoKey(io.stdout());
   });
 
   it("MCP generic respond forwards the same header on AUTO_RELEASE and omits it on HOLD", async () => {
     const id = "req-mcp-auto";
-    const releaseId = "rel-mcp-synthetic";
+    const releaseId = "armrel_synthetic_mcp_secret";
     const autoCalls = mockVanta(({ url, method }) => {
       if (method === "GET" && url.endsWith(`/v1/workflows/${id}`)) {
         return { status: 200, json: workflow(id, "INFORMATION_FOLLOWUP") };
@@ -214,6 +220,8 @@ describe("release id is forwarded only when the server released", () => {
     expect(auto).not.toHaveProperty("isError");
     expect(autoCalls.find((c) => c.url.includes("/v3/workflows/"))?.releaseId).toBe(releaseId);
     expect(autoCalls.find((c) => c.url.endsWith("/response"))?.releaseId).toBeUndefined();
+    assertReleaseIdHidden(auto.content[0].text, releaseId);
+    expect(JSON.parse(auto.content[0].text).result.releaseId).toBe("armrel_");
     expect((autoCalls.find((c) => c.url.includes("/v3/workflows/"))?.body as { shape?: unknown }).shape).toEqual(
       SHAPE
     );
@@ -419,19 +427,16 @@ describe("ARM_RELEASE_* refusals", () => {
 
 describe("human RELEASED approve", () => {
   it("forwards releaseId on the v3 formal respond and says sealed and sent only after that succeeds", async () => {
-    const releaseId = "rel-human-synthetic";
+    const releaseId = ARM_RELEASE_ID_GATE.released.releaseId;
     const requestId = "req-human";
     const calls = mockVanta(({ url, method }) => {
       if (method === "POST" && url.endsWith("/v1/responses/pending/pend-rel/approve")) {
         return {
           status: 200,
           json: {
+            ...ARM_RELEASE_ID_GATE.released,
             id: "pend-rel",
-            disposition: "RELEASED",
-            releaseId,
             requestId,
-            shape: SHAPE,
-            messageId: "msg-human",
           },
         };
       }
@@ -450,6 +455,7 @@ describe("human RELEASED approve", () => {
     expect(calls.find((c) => c.url.includes("/approve"))?.releaseId).toBeUndefined();
     expect(io.stdout()).toMatch(/sealed and sent server-side/);
     expect(io.stdout()).toContain("RESPONDED");
+    assertReleaseIdHidden(io.stdout(), releaseId);
     assertNoKey(io.stdout());
   });
 
@@ -478,7 +484,7 @@ describe("human RELEASED approve", () => {
       json: {
         id: "pend-noreq",
         disposition: "RELEASED",
-        releaseId: "rel-noreq-synthetic-full-token-0123456789abcdef",
+        releaseId: "armrel_noreq_synthetic_full_token_0123456789abcdef",
       },
     }));
     const io = captureIo();
@@ -491,10 +497,11 @@ describe("human RELEASED approve", () => {
     io.restore();
     expect(thrown).toBeInstanceOf(Error);
     const message = (thrown as Error).message;
-    const fullId = "rel-noreq-synthetic-full-token-0123456789abcdef";
+    const fullId = "armrel_noreq_synthetic_full_token_0123456789abcdef";
     expect(message).toContain("formal respond was not sent");
-    expect(message).toContain(releaseIdFingerprint(fullId));
-    expect(message).not.toContain(fullId);
+    expect(message).toContain(displayReleaseId(fullId));
+    expect(message).not.toContain(releaseIdFingerprint(fullId));
+    assertReleaseIdHidden(message, fullId);
     expect(message).not.toMatch(/sealed and sent/i);
     expect(calls).toHaveLength(1);
     expect(calls[0].releaseId).toBeUndefined();
@@ -542,7 +549,7 @@ describe("human RELEASED approve", () => {
 
 describe("contract codes, KYC, and no retry", () => {
   it("uses only the bots#10 ARM_RELEASE codes and never claims sealed and sent", () => {
-    expect([...ARM_RELEASE_CODES]).toEqual([
+    expect(ARM_RELEASE_CODES).toEqual([
       "ARM_RELEASE_REQUIRED",
       "ARM_RELEASE_NOT_FOUND",
       "ARM_RELEASE_REQUEST_MISMATCH",
@@ -551,9 +558,9 @@ describe("contract codes, KYC, and no retry", () => {
       "ARM_RELEASE_EXPIRED",
       "ARM_RELEASE_SHAPE_MISMATCH",
     ]);
-    expect(ARM_RELEASE_CODES as readonly string[]).not.toContain("ARM_RELEASE_NOT_RELEASED");
+    expect(ARM_RELEASE_CODES).not.toContain("ARM_RELEASE_NOT_RELEASED");
     for (const code of ARM_RELEASE_CODES) {
-      const body = ARM_RELEASE_BODIES[code];
+      const body = ARM_RELEASE_ID_GATE.refusals[code as keyof typeof ARM_RELEASE_ID_GATE.refusals];
       const err = new ReqportApiError(409, "/v3/workflows/x/respond", JSON.stringify(body));
       const text = explainError(err);
       expect(text).toContain(body.message);
@@ -586,6 +593,11 @@ describe("contract codes, KYC, and no retry", () => {
     expect(result).toEqual(kycBody);
     expect(calls.some((c) => c.url.includes("/v3/"))).toBe(false);
     expect(calls.every((c) => c.releaseId === undefined)).toBe(true);
+    const mcp = await executeTool(undefined, (client) =>
+      performKycRespond(client, id, { recordStatus: "NOT_FOUND" })
+    );
+    assertReleaseIdHidden(mcp.content[0].text, kycBody.releaseId);
+    expect(JSON.parse(mcp.content[0].text).releaseId).toBe(displayReleaseId(kycBody.releaseId));
   });
 
   it("does not retry a formal respond when the response is lost", async () => {
@@ -597,7 +609,8 @@ describe("contract codes, KYC, and no retry", () => {
       const headers = new Headers(init?.headers);
       if (url.endsWith(`/v3/workflows/${id}/respond`)) {
         expect(headers.get("idempotency-key")).toBeNull();
-        throw new Error("socket hang up");
+        const leaked = headers.get(HEADER);
+        throw new Error(`socket hang up url=https://vanta.test/v3/workflows/${id}/respond?releaseId=${leaked ?? ""}`);
       }
       if (url.endsWith(`/v1/workflows/${id}`)) {
         return new Response(JSON.stringify(workflow(id, "INFORMATION_FOLLOWUP")), {
@@ -606,7 +619,7 @@ describe("contract codes, KYC, and no retry", () => {
         });
       }
       if (url.endsWith(`/v1/requests/${id}/response`)) {
-        return new Response(JSON.stringify(autoRelease("rel-lost")), {
+        return new Response(JSON.stringify(autoRelease("armrel_lost_synthetic_secret")), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
@@ -624,7 +637,55 @@ describe("contract codes, KYC, and no retry", () => {
     expect(message).toContain("not retried");
     expect(message).toContain("ARM_RELEASE_REPLAYED");
     expect(message).toContain("check the request status");
-    expect(message).not.toContain("rel-lost");
+    assertReleaseIdHidden(message, "armrel_lost_synthetic_secret");
     assertNoReleaseClaim(message);
+  });
+
+  it("hides the release id in --json, error text, and URLs while the header keeps it", async () => {
+    const id = "req-json";
+    const releaseId = "armrel_synthetic_01";
+    const calls = mockVanta(({ url, method }) => {
+      if (method === "GET" && url.endsWith(`/v1/workflows/${id}`)) {
+        return { status: 200, json: workflow(id, "INFORMATION_FOLLOWUP") };
+      }
+      if (method === "POST" && url.endsWith(`/v1/requests/${id}/response`)) {
+        return { status: 200, json: autoRelease(releaseId) };
+      }
+      if (method === "POST" && url.endsWith(`/v3/workflows/${id}/respond`)) {
+        return { status: 200, json: { status: "RESPONDED", releaseId } };
+      }
+      return { status: 500, json: { code: "UNEXPECTED_TEST_ROUTE" } };
+    });
+    const io = captureIo();
+    expect(await runRespond("sandbox", id, { status: "NFOU", yes: true, show: false, json: true })).toBe(0);
+    io.restore();
+    expect(calls.find((c) => c.url.includes("/v3/"))?.releaseId).toBe(releaseId);
+    assertReleaseIdHidden(io.stdout(), releaseId);
+    expect(JSON.parse(io.stdout()).result.releaseId).toBe("armrel_");
+
+    const leaked = {
+      code: "ARM_RELEASE_NOT_FOUND",
+      family: "ARM",
+      message: `No ARM release exists for ${releaseId}.`,
+      releaseId,
+      url: `https://vanta.test/v3/workflows/${id}/respond?releaseId=${releaseId}`,
+    };
+    const err = new ReqportApiError(404, `/v3/workflows/${releaseId}/respond`, JSON.stringify(leaked));
+    assertReleaseIdHidden(explainError(err), releaseId);
+    assertReleaseIdHidden(err.message, releaseId);
+    assertReleaseIdHidden(err.path, releaseId);
+    const jsonIo = captureIo();
+    reportCliError(err, true);
+    jsonIo.restore();
+    assertReleaseIdHidden(jsonIo.stdout(), releaseId);
+    const envelope = JSON.parse(jsonIo.stdout()) as { body: { releaseId: string; url: string } };
+    expect(envelope.body.releaseId).toBe("armrel_");
+    expect(envelope.body.url).toContain("armrel_");
+
+    const plain = "rel-noreq-synthetic-full-token-0123456789abcdef";
+    const hashed = redactValue({ releaseId: plain, note: `see ${plain}` }) as { releaseId: string; note: string };
+    expect(hashed.releaseId).toBe(releaseIdFingerprint(plain));
+    expect(hashed.note).toBe(`see ${releaseIdFingerprint(plain)}`);
+    expect(hashed.note).not.toContain(plain);
   });
 });

@@ -4,21 +4,8 @@
  */
 
 import { createInterface } from "node:readline/promises";
-import { isArmReleaseErrorCode } from "./armSurface.js";
-import { redactSecrets, ReqportApiError } from "./client.js";
-
-function redactValue(value: unknown): unknown {
-  if (typeof value === "string") return redactSecrets(value);
-  if (Array.isArray(value)) return value.map(redactValue);
-  if (value && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = redactValue(v);
-    }
-    return out;
-  }
-  return value;
-}
+import { isArmReleaseErrorCode, redactReleaseIdText } from "./armSurface.js";
+import { redactSecrets, redactValue, ReqportApiError } from "./client.js";
 
 /**
  * Machine envelope for a vanta error. `body` is the parsed JSON object when the
@@ -50,15 +37,15 @@ export async function confirm(question: string): Promise<boolean> {
 }
 
 export function printJson(value: unknown): void {
-  process.stdout.write(JSON.stringify(value, null, 2) + "\n");
+  process.stdout.write(JSON.stringify(redactValue(value), null, 2) + "\n");
 }
 
 export function line(s = ""): void {
-  process.stdout.write(s + "\n");
+  process.stdout.write(redactReleaseIdText(s) + "\n");
 }
 
 export function err(s: string): void {
-  process.stderr.write(s + "\n");
+  process.stderr.write(redactReleaseIdText(s) + "\n");
 }
 
 /** Render a compact fixed-width table. */
