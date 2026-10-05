@@ -77,17 +77,14 @@ export function explainError(e: unknown): string {
     if (e.code) {
       const envelope = apiErrorEnvelope(e);
       const json = JSON.stringify(envelope.body, null, 2);
-      // ARM release-gate refusals keep the server's contract message. They are
-      // never rewritten into a sealed-and-sent success.
-      if (e.code === "ARM_RELEASE_REPLAYED") {
-        // The release was already consumed. Say so; do not offer another send
-        // and do not describe it as sealed and sent.
-        const message = contractMessage(envelope.body) ?? "Already submitted. Check the request status.";
-        return `Already submitted. Check the request status.\n${message}\nHTTP ${envelope.httpStatus}\n${json}`;
-      }
+      // ARM release-gate refusals keep Vanta's message and steer. Every contract
+      // message says the answer was not sealed or sent. Do not add a claim that
+      // it went through.
       if (isArmReleaseErrorCode(e.code)) {
         const message = contractMessage(envelope.body) ?? e.code;
-        return `${message}\nHTTP ${envelope.httpStatus}\n${json}`;
+        const hint =
+          e.code === "ARM_RELEASE_REPLAYED" ? "Check the request status before trying again.\n" : "";
+        return `${message}\n${hint}HTTP ${envelope.httpStatus}\n${json}`;
       }
       return `HTTP ${envelope.httpStatus}\n${json}`;
     }

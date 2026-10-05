@@ -18,7 +18,7 @@ export const ARM_SURFACE_BRIEF =
   "A released disposition (AUTO_RELEASE or RELEASED) that includes releaseId is forwarded with the gate shape unchanged, as header X-Reqport-Arm-Release-Id on POST /v3/workflows/{id}/respond. " +
   "That formal call is a single attempt and is not retried. The full release id is sent only on that header. " +
   "Logs, errors, JSON, and other output show the armrel_ prefix or a hash. HOLD and DECLINE send neither the header nor a shape. " +
-  "ARM_RELEASE_* errors are the server message and body. ARM_RELEASE_REPLAYED means the answer was already submitted; check the request status.";
+  "ARM_RELEASE_* errors print the server message and pass steer through. Each refusal says the answer was not sealed or sent. ARM_RELEASE_REPLAYED uses steer already-used; check the request status before trying again.";
 
 /** How the server classified a 2xx response body. Never inferred locally. */
 export type ServerDecision = "released" | "held" | "declined" | "unspecified";

@@ -16,21 +16,26 @@ import { runRespond } from "../src/commands/respond.js";
 import { runPendingApprove } from "../src/commands/pending.js";
 import { executeTool } from "../src/mcp/server.js";
 import { displayReleaseId, releasedArmReleaseId, releaseIdFingerprint, serverDecision } from "../src/armSurface.js";
-import { explainError, reportCliError } from "../src/ui.js";
-import { ARM_RELEASE_CODES, ARM_RELEASE_ID_GATE } from "./fixtures/arm-release-id-gate.js";
+import { apiErrorEnvelope, explainError, reportCliError } from "../src/ui.js";
+import {
+  ARM_RELEASE_CODES,
+  ARM_RELEASE_ID_GATE,
+  ARM_RELEASE_ID_PATTERN,
+  syntheticReleaseId,
+} from "./fixtures/arm-release-id-gate.js";
 import { cleanupConfigDir, clearEnvKnobs, freshConfigDir } from "./helpers.js";
 
 const API_KEY = "rqk_live_syntheticreleaseonly";
 const BASE = "https://vanta.test";
 const HEADER = "x-reqport-arm-release-id";
 
-const SHAPE = ARM_RELEASE_ID_GATE.shape;
+const SHAPE = ARM_RELEASE_ID_GATE.autoRelease.shape;
 const RELEASE_REQUIRED = ARM_RELEASE_ID_GATE.refusals.ARM_RELEASE_REQUIRED;
 const RELEASE_REPLAYED = ARM_RELEASE_ID_GATE.refusals.ARM_RELEASE_REPLAYED;
 const RELEASE_SHAPE = ARM_RELEASE_ID_GATE.refusals.ARM_RELEASE_SHAPE_MISMATCH;
 
-function autoRelease(releaseId: string, extra: Record<string, unknown> = {}) {
-  return { ...ARM_RELEASE_ID_GATE.autoRelease, releaseId, ...extra };
+function autoRelease(label: string, extra: Record<string, unknown> = {}) {
+  return { ...ARM_RELEASE_ID_GATE.autoRelease, releaseId: syntheticReleaseId(label), ...extra };
 }
 
 function assertReleaseIdHidden(text: string, releaseId: string) {
@@ -149,16 +154,28 @@ describe("release id is forwarded only when the server released", () => {
     expect(releasedArmReleaseId({ action: "AUTO_RELEASE", releaseId: "rel-legacy" })).toBe("rel-legacy");
     expect(releasedArmReleaseId({ action: "auto_release", releaseId: "rel-lower" })).toBeUndefined();
     expect(releasedArmReleaseId({ disposition: "RELEASED", releaseId: "  " })).toBeUndefined();
-    expect(displayReleaseId("armrel_synthetic_01")).toBe("armrel_");
+    const shown = syntheticReleaseId("display");
+    expect(ARM_RELEASE_ID_PATTERN.test(shown)).toBe(true);
+    expect(ARM_RELEASE_ID_PATTERN.test(ARM_RELEASE_ID_GATE.autoRelease.releaseId)).toBe(false);
+    expect(displayReleaseId(shown)).toBe("armrel_");
+    expect(displayReleaseId(shown)).not.toContain(shown.slice("armrel_".length));
     expect(displayReleaseId("rel-noreq-synthetic-full-token-0123456789abcdef")).toBe(
       releaseIdFingerprint("rel-noreq-synthetic-full-token-0123456789abcdef")
     );
-    expect(displayReleaseId("armrel_synthetic_01")).not.toContain("synthetic_01");
+    expect(Object.keys(SHAPE.presence)).toEqual(["accounts", "statement"]);
+    expect(ARM_RELEASE_ID_GATE.hold.disposition).toBe("HOLD_FOR_APPROVAL");
+    expect(ARM_RELEASE_ID_GATE.hold).not.toHaveProperty("releaseId");
+    expect(ARM_RELEASE_ID_GATE.decline).not.toHaveProperty("releaseId");
+    expect(ARM_RELEASE_ID_GATE.autoRelease).toMatchObject({
+      expiresAt: "2026-10-05T21:43:00Z",
+      ttlSeconds: 120,
+      requestId: "req_EXAMPLE",
+    });
   });
 
   it("AUTO_RELEASE on POST /v1/requests/{id}/response sends X-Reqport-Arm-Release-Id on v3", async () => {
     const id = "req-auto";
-    const releaseId = "armrel_synthetic_01";
+    const releaseId = syntheticReleaseId("auto");
     const calls = mockVanta(({ url, method }) => {
       if (method === "GET" && url.endsWith(`/v1/workflows/${id}`)) {
         return { status: 200, json: workflow(id, "INFORMATION_FOLLOWUP") };
@@ -166,7 +183,7 @@ describe("release id is forwarded only when the server released", () => {
       if (method === "POST" && url.endsWith(`/v1/requests/${id}/response`)) {
         return {
           status: 200,
-          json: autoRelease(releaseId),
+          json: { ...ARM_RELEASE_ID_GATE.autoRelease, releaseId },
         };
       }
       if (method === "POST" && url.endsWith(`/v3/workflows/${id}/respond`)) {
@@ -189,8 +206,9 @@ describe("release id is forwarded only when the server released", () => {
     expect(gate?.releaseId).toBeUndefined();
     expect(formal?.method).toBe("POST");
     expect(formal?.releaseId).toBe(releaseId);
-    expect(formal?.body).toMatchObject({ nfou: true, correlationId: "msg-auto" });
-    expect((formal?.body as { shape?: unknown }).shape).toEqual(SHAPE);
+    expect(ARM_RELEASE_ID_PATTERN.test(formal?.releaseId ?? "")).toBe(true);
+    expect(formal?.releaseId).not.toBe(ARM_RELEASE_ID_GATE.autoRelease.releaseId);
+    expect(formal?.body).toEqual({ shape: SHAPE, nfou: true });
     expect(formal?.idempotencyKey).toBeUndefined();
     expect(io.stdout()).toContain("The server released this answer.");
     expect(io.stdout()).toMatch(/release id:\s+armrel_\s/);
@@ -201,13 +219,13 @@ describe("release id is forwarded only when the server released", () => {
 
   it("MCP generic respond forwards the same header on AUTO_RELEASE and omits it on HOLD", async () => {
     const id = "req-mcp-auto";
-    const releaseId = "armrel_synthetic_mcp_secret";
+    const releaseId = syntheticReleaseId("mcp");
     const autoCalls = mockVanta(({ url, method }) => {
       if (method === "GET" && url.endsWith(`/v1/workflows/${id}`)) {
         return { status: 200, json: workflow(id, "INFORMATION_FOLLOWUP") };
       }
       if (method === "POST" && url.endsWith(`/v1/requests/${id}/response`)) {
-        return { status: 200, json: autoRelease(releaseId) };
+        return { status: 200, json: { ...ARM_RELEASE_ID_GATE.autoRelease, releaseId } };
       }
       if (method === "POST" && url.endsWith(`/v3/workflows/${id}/respond`)) {
         return { status: 200, json: { status: "RESPONDED" } };
@@ -235,7 +253,7 @@ describe("release id is forwarded only when the server released", () => {
         return { status: 200, json: workflow(holdId, "INFORMATION_FOLLOWUP") };
       }
       if (method === "POST" && url.endsWith(`/v1/requests/${holdId}/response`)) {
-        return { status: 202, json: { disposition: "HOLD" } };
+        return { status: 202, json: ARM_RELEASE_ID_GATE.hold };
       }
       return { status: 500, json: { code: "UNEXPECTED_TEST_ROUTE", url, method } };
     });
@@ -245,10 +263,12 @@ describe("release id is forwarded only when the server released", () => {
     expect(hold).not.toHaveProperty("isError");
     expect(holdCalls.some((c) => c.url.includes("/v3/"))).toBe(false);
     expect(holdCalls.every((c) => c.releaseId === undefined)).toBe(true);
-    const outcome = JSON.parse(hold.content[0].text) as { result: { disposition: string; releaseId?: string; shape?: unknown } };
-    expect(outcome.result).toEqual({ disposition: "HOLD" });
-    expect(outcome.result.releaseId).toBeUndefined();
-    expect(outcome.result.shape).toBeUndefined();
+    const outcome = JSON.parse(hold.content[0].text) as { result: Record<string, unknown> };
+    expect(outcome.result).toEqual(ARM_RELEASE_ID_GATE.hold);
+    expect(outcome.result.disposition).toBe("HOLD_FOR_APPROVAL");
+    expect(outcome.result).not.toHaveProperty("releaseId");
+    expect(outcome.result).not.toHaveProperty("expiresAt");
+    expect(outcome.result).not.toHaveProperty("ttlSeconds");
     assertNoReleaseClaim(hold.content[0].text);
   });
 
@@ -259,7 +279,7 @@ describe("release id is forwarded only when the server released", () => {
         return { status: 200, json: workflow(holdId, "INFORMATION_FOLLOWUP") };
       }
       if (method === "POST" && url.endsWith(`/v1/requests/${holdId}/response`)) {
-        return { status: 202, json: { disposition: "HOLD" } };
+        return { status: 202, json: ARM_RELEASE_ID_GATE.hold };
       }
       return { status: 500, json: { code: "UNEXPECTED_TEST_ROUTE" } };
     });
@@ -279,7 +299,7 @@ describe("release id is forwarded only when the server released", () => {
         return { status: 200, json: workflow(declineId, "INFORMATION_FOLLOWUP") };
       }
       if (method === "POST" && url.endsWith(`/v1/requests/${declineId}/response`)) {
-        return { status: 200, json: { disposition: "DECLINE", reason: "ruleset" } };
+        return { status: 200, json: ARM_RELEASE_ID_GATE.decline };
       }
       return { status: 500, json: { code: "UNEXPECTED_TEST_ROUTE" } };
     });
@@ -317,12 +337,13 @@ describe("release id is forwarded only when the server released", () => {
   it("binds a pre-sealed payload on the formal respond when the gate releases", async () => {
     const id = "req-payload";
     const payloadId = "11111111-1111-1111-1111-111111111111";
+    const gate = autoRelease("payload");
     const calls = mockVanta(({ url, method }) => {
       if (method === "GET" && url.endsWith(`/v1/workflows/${id}`)) {
         return { status: 200, json: workflow(id, "INFORMATION_FOLLOWUP") };
       }
       if (method === "POST" && url.endsWith(`/v1/requests/${id}/response`)) {
-        return { status: 200, json: autoRelease("rel-payload") };
+        return { status: 200, json: gate };
       }
       if (method === "POST" && url.endsWith(`/v3/workflows/${id}/respond`)) {
         return { status: 200, json: { status: "RESPONDED" } };
@@ -333,10 +354,10 @@ describe("release id is forwarded only when the server released", () => {
       performRespond(client, id, { status: "COMP", payloadId, freeText: "see payload" })
     );
     const formal = calls.find((c) => c.url.includes("/v3/workflows/"));
-    expect(formal?.releaseId).toBe("rel-payload");
+    expect(formal?.releaseId).toBe(gate.releaseId);
+    expect(ARM_RELEASE_ID_PATTERN.test(gate.releaseId)).toBe(true);
     expect(formal?.body).toEqual({
       shape: SHAPE,
-      correlationId: "msg-auto",
       responsePayload: { payloadId, purpose: "RESPONSE" },
     });
   });
@@ -350,7 +371,7 @@ describe("ARM_RELEASE_* refusals", () => {
         return { status: 200, json: workflow(id, "INFORMATION_FOLLOWUP") };
       }
       if (method === "POST" && url.endsWith(`/v1/requests/${id}/response`)) {
-        return { status: 409, json: RELEASE_SHAPE };
+        return { status: RELEASE_SHAPE.http, json: RELEASE_SHAPE.body };
       }
       return { status: 500, json: { code: "UNEXPECTED_TEST_ROUTE" } };
     });
@@ -364,16 +385,18 @@ describe("ARM_RELEASE_* refusals", () => {
     expect(err).toBeInstanceOf(ReqportApiError);
     expect(err.code).toBe("ARM_RELEASE_SHAPE_MISMATCH");
     const explained = explainError(err);
-    expect(explained).toContain(RELEASE_SHAPE.message);
+    expect(explained).toContain(RELEASE_SHAPE.body.message);
     expect(explained).toContain("ARM_RELEASE_SHAPE_MISMATCH");
-    expect(explained).toContain("repeat-gate-shape");
+    expect(explained).toContain("shape-must-match-release");
+    expect(explained).toContain("not sealed or sent");
+    expect(explained).not.toContain("Already submitted");
     assertNoReleaseClaim(explained);
     expect(calls.some((c) => c.url.includes("/v3/"))).toBe(false);
 
     const io = captureIo();
     reportCliError(err, false);
     io.restore();
-    expect(io.stderr()).toContain(RELEASE_SHAPE.message);
+    expect(io.stderr()).toContain(RELEASE_SHAPE.body.message);
     assertNoReleaseClaim(io.stderr());
     assertNoKey(io.stderr());
 
@@ -382,7 +405,8 @@ describe("ARM_RELEASE_* refusals", () => {
     );
     expect(mcp.isError).toBe(true);
     const envelope = JSON.parse(mcp.content[0].text);
-    expect(envelope.body).toEqual(RELEASE_SHAPE);
+    expect(envelope.httpStatus).toBe(RELEASE_SHAPE.http);
+    expect(envelope.body).toEqual(RELEASE_SHAPE.body);
     assertNoReleaseClaim(mcp.content[0].text);
   });
 
@@ -393,10 +417,10 @@ describe("ARM_RELEASE_* refusals", () => {
         return { status: 200, json: workflow(id, "INFORMATION_FOLLOWUP") };
       }
       if (method === "POST" && url.endsWith(`/v1/requests/${id}/response`)) {
-        return { status: 200, json: autoRelease("rel-bad") };
+        return { status: 200, json: autoRelease("formal-required") };
       }
       if (method === "POST" && url.endsWith(`/v3/workflows/${id}/respond`)) {
-        return { status: 400, json: RELEASE_REQUIRED };
+        return { status: RELEASE_REQUIRED.http, json: RELEASE_REQUIRED.body };
       }
       return { status: 500, json: { code: "UNEXPECTED_TEST_ROUTE" } };
     });
@@ -411,7 +435,9 @@ describe("ARM_RELEASE_* refusals", () => {
     const err = thrown as ReqportApiError;
     expect(err).toBeInstanceOf(ReqportApiError);
     expect(err.code).toBe("ARM_RELEASE_REQUIRED");
-    expect(explainError(err)).toContain(RELEASE_REQUIRED.message);
+    expect(err.status).toBe(403);
+    expect(explainError(err)).toContain(RELEASE_REQUIRED.body.message);
+    expect(explainError(err)).toContain("shared-gate-first");
     assertNoReleaseClaim(explainError(err));
     assertNoReleaseClaim(io.stdout());
     expect(io.stdout()).not.toContain("The server released");
@@ -420,14 +446,14 @@ describe("ARM_RELEASE_* refusals", () => {
       performRespond(client, id, { status: "NFOU" })
     );
     expect(mcp.isError).toBe(true);
-    expect(JSON.parse(mcp.content[0].text).body.message).toBe(RELEASE_REQUIRED.message);
+    expect(JSON.parse(mcp.content[0].text).body).toEqual(RELEASE_REQUIRED.body);
     assertNoReleaseClaim(mcp.content[0].text);
   });
 });
 
 describe("human RELEASED approve", () => {
   it("forwards releaseId on the v3 formal respond and says sealed and sent only after that succeeds", async () => {
-    const releaseId = ARM_RELEASE_ID_GATE.released.releaseId;
+    const releaseId = syntheticReleaseId("human");
     const requestId = "req-human";
     const calls = mockVanta(({ url, method }) => {
       if (method === "POST" && url.endsWith("/v1/responses/pending/pend-rel/approve")) {
@@ -436,6 +462,7 @@ describe("human RELEASED approve", () => {
           json: {
             ...ARM_RELEASE_ID_GATE.released,
             id: "pend-rel",
+            releaseId,
             requestId,
           },
         };
@@ -450,6 +477,8 @@ describe("human RELEASED approve", () => {
     io.restore();
     const formal = calls.find((c) => c.url.includes("/v3/workflows/"));
     expect(formal?.releaseId).toBe(releaseId);
+    expect(ARM_RELEASE_ID_PATTERN.test(releaseId)).toBe(true);
+    expect(releaseId).not.toBe(ARM_RELEASE_ID_GATE.released.releaseId);
     expect((formal?.body as { shape?: unknown }).shape).toEqual(SHAPE);
     expect(formal?.idempotencyKey).toBeUndefined();
     expect(calls.find((c) => c.url.includes("/approve"))?.releaseId).toBeUndefined();
@@ -464,7 +493,7 @@ describe("human RELEASED approve", () => {
       if (method === "POST" && url.endsWith("/approve")) {
         return {
           status: 200,
-          json: { id: "pend-hold", disposition: "HOLD" },
+          json: { ...ARM_RELEASE_ID_GATE.hold, id: "pend-hold" },
         };
       }
       return { status: 500, json: { code: "UNEXPECTED_TEST_ROUTE", url, method } };
@@ -484,7 +513,7 @@ describe("human RELEASED approve", () => {
       json: {
         id: "pend-noreq",
         disposition: "RELEASED",
-        releaseId: "armrel_noreq_synthetic_full_token_0123456789abcdef",
+        releaseId: syntheticReleaseId("noreq"),
       },
     }));
     const io = captureIo();
@@ -497,7 +526,7 @@ describe("human RELEASED approve", () => {
     io.restore();
     expect(thrown).toBeInstanceOf(Error);
     const message = (thrown as Error).message;
-    const fullId = "armrel_noreq_synthetic_full_token_0123456789abcdef";
+    const fullId = syntheticReleaseId("noreq");
     expect(message).toContain("formal respond was not sent");
     expect(message).toContain(displayReleaseId(fullId));
     expect(message).not.toContain(releaseIdFingerprint(fullId));
@@ -516,14 +545,14 @@ describe("human RELEASED approve", () => {
           json: {
             id: "pend-bad",
             disposition: "RELEASED",
-            releaseId: "rel-stale",
+            releaseId: syntheticReleaseId("stale"),
             requestId: "req-stale",
             shape: SHAPE,
           },
         };
       }
       if (method === "POST" && url.includes("/v3/workflows/")) {
-        return { status: 409, json: RELEASE_REPLAYED };
+        return { status: RELEASE_REPLAYED.http, json: RELEASE_REPLAYED.body };
       }
       return { status: 500, json: { code: "UNEXPECTED_TEST_ROUTE" } };
     });
@@ -538,9 +567,12 @@ describe("human RELEASED approve", () => {
     const err = thrown as ReqportApiError;
     expect(err).toBeInstanceOf(ReqportApiError);
     const explained = explainError(err);
-    expect(explained).toContain("Already submitted. Check the request status.");
-    expect(explained).toContain(RELEASE_REPLAYED.message);
-    expect(explained).toContain("already-submitted");
+    expect(explained).toContain(RELEASE_REPLAYED.body.message);
+    expect(explained).toContain("already-used");
+    expect(explained).toContain("not sealed or sent");
+    expect(explained).toContain("Check the request status before trying again.");
+    expect(explained).not.toContain("Already submitted");
+    expect(apiErrorEnvelope(err).body).toEqual(RELEASE_REPLAYED.body);
     assertNoReleaseClaim(explained);
     assertNoReleaseClaim(explainError(err));
     assertNoReleaseClaim(io.stdout());
@@ -559,14 +591,40 @@ describe("contract codes, KYC, and no retry", () => {
       "ARM_RELEASE_SHAPE_MISMATCH",
     ]);
     expect(ARM_RELEASE_CODES).not.toContain("ARM_RELEASE_NOT_RELEASED");
+    const steerUse = {
+      ARM_RELEASE_REQUIRED: "shared-gate-first",
+      ARM_RELEASE_NOT_FOUND: "shared-gate-first",
+      ARM_RELEASE_REQUEST_MISMATCH: "shared-gate-first",
+      ARM_RELEASE_REPLAYED: "already-used",
+      ARM_RELEASE_SUPERSEDED: "release-superseded",
+      ARM_RELEASE_EXPIRED: "release-expired",
+      ARM_RELEASE_SHAPE_MISMATCH: "shape-must-match-release",
+    } as const;
+    const httpStatus = {
+      ARM_RELEASE_REQUIRED: 403,
+      ARM_RELEASE_NOT_FOUND: 404,
+      ARM_RELEASE_REQUEST_MISMATCH: 403,
+      ARM_RELEASE_REPLAYED: 409,
+      ARM_RELEASE_SUPERSEDED: 403,
+      ARM_RELEASE_EXPIRED: 403,
+      ARM_RELEASE_SHAPE_MISMATCH: 409,
+    } as const;
     for (const code of ARM_RELEASE_CODES) {
-      const body = ARM_RELEASE_ID_GATE.refusals[code as keyof typeof ARM_RELEASE_ID_GATE.refusals];
-      const err = new ReqportApiError(409, "/v3/workflows/x/respond", JSON.stringify(body));
+      const key = code as keyof typeof ARM_RELEASE_ID_GATE.refusals;
+      const refusal = ARM_RELEASE_ID_GATE.refusals[key];
+      expect(refusal.http).toBe(httpStatus[key]);
+      expect(refusal.body.steer.use).toBe(steerUse[key]);
+      expect(refusal.body).not.toHaveProperty("steer.action");
+      const err = new ReqportApiError(refusal.http, "/v3/workflows/x/respond", JSON.stringify(refusal.body));
       const text = explainError(err);
-      expect(text).toContain(body.message);
-      expect(text).toContain(body.code);
-      expect(text).toContain(body.steer.action);
+      expect(text).toContain(refusal.body.message);
+      expect(text).toContain(refusal.body.code);
+      expect(text).toContain(refusal.body.steer.use);
+      expect(text).toContain("not sealed or sent");
+      expect(text).not.toContain("Already submitted");
       assertNoReleaseClaim(text);
+      expect(apiErrorEnvelope(err).httpStatus).toBe(refusal.http);
+      expect(apiErrorEnvelope(err).body).toEqual(refusal.body);
     }
   });
 
@@ -574,7 +632,7 @@ describe("contract codes, KYC, and no retry", () => {
     const id = "req-kyc";
     const kycBody = {
       disposition: "AUTO_RELEASE",
-      releaseId: "rel-kyc-must-not-forward",
+      releaseId: syntheticReleaseId("kyc"),
       shape: SHAPE,
       record_status: "NOT_FOUND",
     };
@@ -619,7 +677,7 @@ describe("contract codes, KYC, and no retry", () => {
         });
       }
       if (url.endsWith(`/v1/requests/${id}/response`)) {
-        return new Response(JSON.stringify(autoRelease("armrel_lost_synthetic_secret")), {
+        return new Response(JSON.stringify(autoRelease("lost")), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
@@ -637,19 +695,19 @@ describe("contract codes, KYC, and no retry", () => {
     expect(message).toContain("not retried");
     expect(message).toContain("ARM_RELEASE_REPLAYED");
     expect(message).toContain("check the request status");
-    assertReleaseIdHidden(message, "armrel_lost_synthetic_secret");
+    assertReleaseIdHidden(message, syntheticReleaseId("lost"));
     assertNoReleaseClaim(message);
   });
 
   it("hides the release id in --json, error text, and URLs while the header keeps it", async () => {
     const id = "req-json";
-    const releaseId = "armrel_synthetic_01";
+    const releaseId = syntheticReleaseId("json");
     const calls = mockVanta(({ url, method }) => {
       if (method === "GET" && url.endsWith(`/v1/workflows/${id}`)) {
         return { status: 200, json: workflow(id, "INFORMATION_FOLLOWUP") };
       }
       if (method === "POST" && url.endsWith(`/v1/requests/${id}/response`)) {
-        return { status: 200, json: autoRelease(releaseId) };
+        return { status: 200, json: { ...ARM_RELEASE_ID_GATE.autoRelease, releaseId } };
       }
       if (method === "POST" && url.endsWith(`/v3/workflows/${id}/respond`)) {
         return { status: 200, json: { status: "RESPONDED", releaseId } };
