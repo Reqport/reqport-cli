@@ -104,7 +104,7 @@ function ok(value: unknown) {
 function fail(e: unknown) {
   // Coded API errors (ARM 400/403, ruleset reject-steer) are the vanta envelope.
   // Do not wrap them in a scope hint or a HOLD success. Release ids in that
-  // body are the prefix or a hash; the full token stays on the request header.
+  // body are `armrel_…` or `[redacted]`; the full token stays on the request header.
   const text =
     e instanceof ReqportApiError && e.code
       ? JSON.stringify(redactValue(apiErrorEnvelope(e)), null, 2)

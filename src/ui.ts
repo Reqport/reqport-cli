@@ -99,9 +99,9 @@ export function explainError(e: unknown): string {
               ? " — service says the operation is unavailable in this environment."
               : "";
     const body = e.body ? ` ${redactSecrets(e.body)}` : "";
-    return redactSecrets(`HTTP ${e.status} on ${e.path}${hint}${body}`);
+    return redactReleaseIdText(redactSecrets(`HTTP ${e.status} on ${e.path}${hint}${body}`));
   }
-  return redactSecrets(e instanceof Error ? e.message : String(e));
+  return redactReleaseIdText(redactSecrets(e instanceof Error ? e.message : String(e)));
 }
 
 /**

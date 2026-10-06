@@ -99,8 +99,8 @@ export class ReqportApiError extends Error {
   constructor(status: number, path: string, body: string, message?: string) {
     const parsed = parseErrorBody(body);
     const redactedParsed = parsed === undefined ? undefined : redactValue(parsed);
-    const safeBody = redactedParsed !== undefined ? JSON.stringify(redactedParsed) : redactSecrets(body);
-    const safePath = redactSecrets(path);
+    const safeBody = redactedParsed !== undefined ? JSON.stringify(redactedParsed) : redactReleaseIdText(redactSecrets(body));
+    const safePath = redactReleaseIdText(redactSecrets(path));
     super(message ?? `Vanta ${status} on ${safePath}${safeBody ? `: ${safeBody}` : ""}`);
     this.name = "ReqportApiError";
     this.status = status;
@@ -118,14 +118,18 @@ export class ReqportApiError extends Error {
 const SECRET_KEY = /rqk_live_[A-Za-z0-9_-]+/g;
 const BEARER = /Bearer\s+\S+/gi;
 
-/** Strip API keys, bearer tokens, and full ARM release ids from a string. Idempotent. */
+/** Strip API keys and bearer tokens. Idempotent. Release ids are not hashed here. */
 export function redactSecrets(s: string): string {
-  return redactReleaseIdText(s.replace(SECRET_KEY, "[redacted]").replace(BEARER, "Bearer [redacted]"));
+  return s.replace(SECRET_KEY, "[redacted]").replace(BEARER, "Bearer [redacted]");
 }
 
 function isReleaseIdKey(key: string): boolean {
   const normalized = key.toLowerCase();
   return normalized === "releaseid" || normalized === "release_id" || normalized === "x-reqport-arm-release-id";
+}
+
+function isApiKeyMaterial(value: string): boolean {
+  return value.includes("rqk_live_");
 }
 
 function collectReleaseIds(value: unknown, out: Set<string>): void {
@@ -135,23 +139,30 @@ function collectReleaseIds(value: unknown, out: Set<string>): void {
     return;
   }
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    if (typeof child === "string" && isReleaseIdKey(key) && child.length >= 8) out.add(child);
-    else collectReleaseIds(child, out);
+    if (typeof child === "string" && isReleaseIdKey(key) && child.length >= 8 && !isApiKeyMaterial(child)) {
+      out.add(child);
+    } else collectReleaseIds(child, out);
   }
 }
 
+/** Release-id display. API-key material is masked first and is not passed in. */
+function visibleReleaseField(value: string): string {
+  if (isApiKeyMaterial(value)) return "[redacted]";
+  return displayReleaseId(value);
+}
+
 function scrubReleaseIds(s: string, secrets: readonly string[]): string {
-  let out = redactSecrets(s);
+  let out = redactReleaseIdText(redactSecrets(s));
   for (const secret of secrets) {
     if (secret.startsWith("armrel_")) continue;
-    out = out.split(secret).join(displayReleaseId(secret));
+    out = out.split(secret).join(visibleReleaseField(secret));
   }
   return out;
 }
 
 /**
- * Copy safe to print, log, or return from MCP. `releaseId` values become the
- * `armrel_` prefix or a hash. The request header is not built from this copy.
+ * Copy safe to print, log, or return from MCP. `releaseId` values become
+ * `armrel_…` or `[redacted]`. The request header is not built from this copy.
  */
 export function redactValue(value: unknown): unknown {
   const secrets = new Set<string>();
@@ -162,7 +173,7 @@ export function redactValue(value: unknown): unknown {
 
 function redactValueInner(value: unknown, key: string | undefined, secrets: readonly string[]): unknown {
   if (typeof value === "string") {
-    if (key && isReleaseIdKey(key)) return displayReleaseId(value);
+    if (key && isReleaseIdKey(key)) return visibleReleaseField(value);
     return scrubReleaseIds(value, secrets);
   }
   if (Array.isArray(value)) return value.map((item) => redactValueInner(item, undefined, secrets));
@@ -250,7 +261,7 @@ export class ReqportClient {
       const msg = e instanceof Error ? e.message : String(e);
       const releaseHeader = h[ARM_RELEASE_ID_HEADER];
       const scrubbed = releaseHeader ? msg.split(releaseHeader).join(displayReleaseId(releaseHeader)) : msg;
-      throw new Error(redactSecrets(`Network error calling ${this.url(path)}: ${scrubbed}`));
+      throw new Error(redactReleaseIdText(redactSecrets(`Network error calling ${this.url(path)}: ${scrubbed}`)));
     }
 
     if (!res.ok) {
@@ -293,7 +304,7 @@ export class ReqportClient {
       res = await fetch(this.url(path), { ...rest, headers: h });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      throw new Error(redactSecrets(`Network error calling ${this.url(path)}: ${msg}`));
+      throw new Error(redactReleaseIdText(redactSecrets(`Network error calling ${this.url(path)}: ${msg}`)));
     }
 
     if (!res.ok) {
@@ -540,7 +551,8 @@ export class ReqportClient {
     } catch (e) {
       if (e instanceof ReqportApiError) throw e;
       const msg = e instanceof Error ? e.message : String(e);
-      const scrubbed = redactSecrets(msg.split(id).join(displayReleaseId(id)));
+      const shown = isApiKeyMaterial(id) ? "[redacted]" : displayReleaseId(id);
+      const scrubbed = redactReleaseIdText(redactSecrets(msg.split(id).join(shown)));
       throw new Error(
         `${scrubbed} The formal respond was not retried. If it already committed, check the request status; a second attempt is ARM_RELEASE_REPLAYED.`
       );

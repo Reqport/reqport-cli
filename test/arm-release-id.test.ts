@@ -9,13 +9,14 @@
  * Synthetic data only.
  */
 
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { redactValue, ReqportApiError, ReqportClient } from "../src/client.js";
+import { redactSecrets, redactValue, ReqportApiError, ReqportClient } from "../src/client.js";
 import { performKycRespond, performRespond } from "../src/core.js";
 import { runRespond } from "../src/commands/respond.js";
 import { runPendingApprove } from "../src/commands/pending.js";
 import { executeTool } from "../src/mcp/server.js";
-import { displayReleaseId, releasedArmReleaseId, releaseIdFingerprint, serverDecision } from "../src/armSurface.js";
+import { ARM_RELEASE_ID_VISIBLE, displayReleaseId, RELEASE_ID_REDACTED, releasedArmReleaseId, serverDecision } from "../src/armSurface.js";
 import { apiErrorEnvelope, explainError, reportCliError } from "../src/ui.js";
 import {
   ARM_RELEASE_CODES,
@@ -157,11 +158,10 @@ describe("release id is forwarded only when the server released", () => {
     const shown = syntheticReleaseId("display");
     expect(ARM_RELEASE_ID_PATTERN.test(shown)).toBe(true);
     expect(ARM_RELEASE_ID_PATTERN.test(ARM_RELEASE_ID_GATE.autoRelease.releaseId)).toBe(false);
-    expect(displayReleaseId(shown)).toBe("armrel_");
+    expect(displayReleaseId(shown)).toBe(ARM_RELEASE_ID_VISIBLE);
+    expect(displayReleaseId(shown)).toBe("armrel_…");
     expect(displayReleaseId(shown)).not.toContain(shown.slice("armrel_".length));
-    expect(displayReleaseId("rel-noreq-synthetic-full-token-0123456789abcdef")).toBe(
-      releaseIdFingerprint("rel-noreq-synthetic-full-token-0123456789abcdef")
-    );
+    expect(displayReleaseId("rel-noreq-synthetic-full-token-0123456789abcdef")).toBe(RELEASE_ID_REDACTED);
     expect(Object.keys(SHAPE.presence)).toEqual(["accounts", "statement"]);
     expect(ARM_RELEASE_ID_GATE.hold.disposition).toBe("HOLD_FOR_APPROVAL");
     expect(ARM_RELEASE_ID_GATE.hold).not.toHaveProperty("releaseId");
@@ -211,7 +211,7 @@ describe("release id is forwarded only when the server released", () => {
     expect(formal?.body).toEqual({ shape: SHAPE, nfou: true });
     expect(formal?.idempotencyKey).toBeUndefined();
     expect(io.stdout()).toContain("The server released this answer.");
-    expect(io.stdout()).toMatch(/release id:\s+armrel_\s/);
+    expect(io.stdout()).toMatch(/release id:\s+armrel_…/);
     assertReleaseIdHidden(io.stdout(), releaseId);
     assertNoReleaseClaim(io.stdout());
     assertNoKey(io.stdout());
@@ -239,7 +239,7 @@ describe("release id is forwarded only when the server released", () => {
     expect(autoCalls.find((c) => c.url.includes("/v3/workflows/"))?.releaseId).toBe(releaseId);
     expect(autoCalls.find((c) => c.url.endsWith("/response"))?.releaseId).toBeUndefined();
     assertReleaseIdHidden(auto.content[0].text, releaseId);
-    expect(JSON.parse(auto.content[0].text).result.releaseId).toBe("armrel_");
+    expect(JSON.parse(auto.content[0].text).result.releaseId).toBe("armrel_…");
     expect((autoCalls.find((c) => c.url.includes("/v3/workflows/"))?.body as { shape?: unknown }).shape).toEqual(
       SHAPE
     );
@@ -528,8 +528,8 @@ describe("human RELEASED approve", () => {
     const message = (thrown as Error).message;
     const fullId = syntheticReleaseId("noreq");
     expect(message).toContain("formal respond was not sent");
-    expect(message).toContain(displayReleaseId(fullId));
-    expect(message).not.toContain(releaseIdFingerprint(fullId));
+    expect(message).toContain("armrel_…");
+    expect(message).not.toContain(fullId.slice("armrel_".length));
     assertReleaseIdHidden(message, fullId);
     expect(message).not.toMatch(/sealed and sent/i);
     expect(calls).toHaveLength(1);
@@ -719,7 +719,7 @@ describe("contract codes, KYC, and no retry", () => {
     io.restore();
     expect(calls.find((c) => c.url.includes("/v3/"))?.releaseId).toBe(releaseId);
     assertReleaseIdHidden(io.stdout(), releaseId);
-    expect(JSON.parse(io.stdout()).result.releaseId).toBe("armrel_");
+    expect(JSON.parse(io.stdout()).result.releaseId).toBe("armrel_…");
 
     const leaked = {
       code: "ARM_RELEASE_NOT_FOUND",
@@ -737,13 +737,34 @@ describe("contract codes, KYC, and no retry", () => {
     jsonIo.restore();
     assertReleaseIdHidden(jsonIo.stdout(), releaseId);
     const envelope = JSON.parse(jsonIo.stdout()) as { body: { releaseId: string; url: string } };
-    expect(envelope.body.releaseId).toBe("armrel_");
-    expect(envelope.body.url).toContain("armrel_");
+    expect(envelope.body.releaseId).toBe("armrel_…");
+    expect(envelope.body.url).toContain("armrel_…");
 
     const plain = "rel-noreq-synthetic-full-token-0123456789abcdef";
-    const hashed = redactValue({ releaseId: plain, note: `see ${plain}` }) as { releaseId: string; note: string };
-    expect(hashed.releaseId).toBe(releaseIdFingerprint(plain));
-    expect(hashed.note).toBe(`see ${releaseIdFingerprint(plain)}`);
-    expect(hashed.note).not.toContain(plain);
+    const hidden = redactValue({ releaseId: plain, note: `see ${plain}` }) as { releaseId: string; note: string };
+    expect(hidden.releaseId).toBe("[redacted]");
+    expect(hidden.note).toBe("see [redacted]");
+    expect(hidden.note).not.toContain(plain);
+  });
+
+  it("masks an API key with [redacted] and does not hash it", () => {
+    const key = API_KEY;
+    expect(redactSecrets(`token ${key} and Bearer ${key}`)).toBe("token [redacted] and Bearer [redacted]");
+    const printed = redactValue({
+      releaseId: key,
+      note: `see ${key}`,
+      authorization: `Bearer ${key}`,
+    }) as { releaseId: string; note: string; authorization: string };
+    const text = JSON.stringify(printed);
+    expect(text).not.toContain(key);
+    expect(text).not.toContain("rqk_live_");
+    expect(printed.releaseId).toBe("[redacted]");
+    expect(printed.note).toBe("see [redacted]");
+    expect(printed.authorization).toBe("Bearer [redacted]");
+    for (const file of ["../src/armSurface.ts", "../src/client.ts", "../src/ui.ts"]) {
+      const source = readFileSync(new URL(file, import.meta.url), "utf8");
+      expect(source).not.toContain("createHash");
+      expect(source).not.toContain("releaseIdFingerprint");
+    }
   });
 });

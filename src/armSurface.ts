@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 /**
  * ARM v0.1 machine-surface copy shared by CLI help and MCP tool docs.
  *
@@ -17,7 +15,7 @@ export const ARM_SURFACE_BRIEF =
   "CLI --json and MCP return that body unchanged. " +
   "A released disposition (AUTO_RELEASE or RELEASED) that includes releaseId is forwarded with the gate shape unchanged, as header X-Reqport-Arm-Release-Id on POST /v3/workflows/{id}/respond. " +
   "That formal call is a single attempt and is not retried. The full release id is sent only on that header. " +
-  "Logs, errors, JSON, and other output show the armrel_ prefix or a hash. HOLD and DECLINE send neither the header nor a shape. " +
+  "Logs, errors, JSON, and other output show the armrel_ prefix (armrel_…). An id without that prefix is [redacted]. HOLD and DECLINE send neither the header nor a shape. " +
   "ARM_RELEASE_* errors print the server message and pass steer through. Each refusal says the answer was not sealed or sent. ARM_RELEASE_REPLAYED uses steer already-used; check the request status before trying again.";
 
 /** How the server classified a 2xx response body. Never inferred locally. */
@@ -108,26 +106,24 @@ export function isArmReleaseErrorCode(code: string | undefined): boolean {
   return typeof code === "string" && code.startsWith("ARM_RELEASE_");
 }
 
-/**
- * Short hash of a release id. Used when the id has no `armrel_` prefix.
- * It must never include the full token.
- */
-export function releaseIdFingerprint(releaseId: string): string {
-  return createHash("sha256").update(releaseId, "utf8").digest("hex").slice(0, 12);
-}
+/** Visible prefix for a release id. The rest of the token is never shown. */
+export const ARM_RELEASE_ID_VISIBLE = "armrel_…";
+
+/** Fixed marker for a release id that has no `armrel_` prefix. Not a hash. */
+export const RELEASE_ID_REDACTED = "[redacted]";
 
 /**
  * Visible form of a release id. The full token is allowed only on
- * `X-Reqport-Arm-Release-Id`. Everywhere else this is the `armrel_` prefix,
- * or a hash when the id does not start with that prefix.
+ * `X-Reqport-Arm-Release-Id`. Everywhere else this is `armrel_…`, or
+ * `[redacted]` when the id has no `armrel_` prefix.
  */
 export function displayReleaseId(releaseId: string): string {
   const id = releaseId.trim();
-  if (id.startsWith(ARM_RELEASE_ID_PREFIX)) return ARM_RELEASE_ID_PREFIX;
-  return releaseIdFingerprint(id);
+  if (id.startsWith(ARM_RELEASE_ID_PREFIX)) return ARM_RELEASE_ID_VISIBLE;
+  return RELEASE_ID_REDACTED;
 }
 
 /** Replace any `armrel_…` token in text with the prefix. Leaves a bare `armrel_` as-is. */
 export function redactReleaseIdText(s: string): string {
-  return s.replace(ARMREL_TOKEN, (token) => displayReleaseId(token));
+  return s.replace(ARMREL_TOKEN, () => ARM_RELEASE_ID_VISIBLE);
 }
