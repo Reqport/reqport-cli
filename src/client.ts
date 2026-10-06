@@ -16,6 +16,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { ARM_RELEASE_ID_HEADER, displayReleaseId, redactReleaseIdText } from "./armSurface.js";
 import { resolveBaseUrl, type ReqportEnv } from "./env.js";
 import type {
   AffordanceListResponse,
@@ -46,6 +47,8 @@ import type {
   FirRefundInstructionRequest,
   FirSubmitResponseRequest,
   FirUpdateRequest,
+  FormalRespondRequest,
+  FormalRespondResult,
   KycResponseSubmission,
   KycResponseView,
   ListRequestsResponse,
@@ -94,14 +97,16 @@ export class ReqportApiError extends Error {
    */
   readonly parsedBody: unknown;
   constructor(status: number, path: string, body: string, message?: string) {
-    const safeBody = redactSecrets(body);
-    super(message ?? `Vanta ${status} on ${path}${safeBody ? `: ${safeBody}` : ""}`);
+    const parsed = parseErrorBody(body);
+    const redactedParsed = parsed === undefined ? undefined : redactValue(parsed);
+    const safeBody = redactedParsed !== undefined ? JSON.stringify(redactedParsed) : redactReleaseIdText(redactSecrets(body));
+    const safePath = redactReleaseIdText(redactSecrets(path));
+    super(message ?? `Vanta ${status} on ${safePath}${safeBody ? `: ${safeBody}` : ""}`);
     this.name = "ReqportApiError";
     this.status = status;
-    this.path = path;
+    this.path = safePath;
     this.body = safeBody;
-    const parsed = parseErrorBody(body);
-    this.parsedBody = parsed === undefined ? undefined : redactValue(parsed);
+    this.parsedBody = redactedParsed;
   }
 
   /** Stable machine code when the body carries `code`, `error`, or `errorCode`. */
@@ -113,18 +118,69 @@ export class ReqportApiError extends Error {
 const SECRET_KEY = /rqk_live_[A-Za-z0-9_-]+/g;
 const BEARER = /Bearer\s+\S+/gi;
 
-/** Strip API keys and bearer tokens from a string. Idempotent. */
+/** Strip API keys and bearer tokens. Idempotent. Release ids are not hashed here. */
 export function redactSecrets(s: string): string {
   return s.replace(SECRET_KEY, "[redacted]").replace(BEARER, "Bearer [redacted]");
 }
 
-function redactValue(value: unknown): unknown {
-  if (typeof value === "string") return redactSecrets(value);
-  if (Array.isArray(value)) return value.map(redactValue);
+function isReleaseIdKey(key: string): boolean {
+  const normalized = key.toLowerCase();
+  return normalized === "releaseid" || normalized === "release_id" || normalized === "x-reqport-arm-release-id";
+}
+
+function isApiKeyMaterial(value: string): boolean {
+  return value.includes("rqk_live_");
+}
+
+function collectReleaseIds(value: unknown, out: Set<string>): void {
+  if (!value || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    for (const item of value) collectReleaseIds(item, out);
+    return;
+  }
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof child === "string" && isReleaseIdKey(key) && child.length >= 8 && !isApiKeyMaterial(child)) {
+      out.add(child);
+    } else collectReleaseIds(child, out);
+  }
+}
+
+/** Release-id display. API-key material is masked first and is not passed in. */
+function visibleReleaseField(value: string): string {
+  if (isApiKeyMaterial(value)) return "[redacted]";
+  return displayReleaseId(value);
+}
+
+function scrubReleaseIds(s: string, secrets: readonly string[]): string {
+  let out = redactReleaseIdText(redactSecrets(s));
+  for (const secret of secrets) {
+    if (secret.startsWith("armrel_")) continue;
+    out = out.split(secret).join(visibleReleaseField(secret));
+  }
+  return out;
+}
+
+/**
+ * Copy safe to print, log, or return from MCP. `releaseId` values become
+ * `armrel_…` or `[redacted]`. The request header is not built from this copy.
+ */
+export function redactValue(value: unknown): unknown {
+  const secrets = new Set<string>();
+  collectReleaseIds(value, secrets);
+  const ordered = [...secrets].sort((a, b) => b.length - a.length);
+  return redactValueInner(value, undefined, ordered);
+}
+
+function redactValueInner(value: unknown, key: string | undefined, secrets: readonly string[]): unknown {
+  if (typeof value === "string") {
+    if (key && isReleaseIdKey(key)) return visibleReleaseField(value);
+    return scrubReleaseIds(value, secrets);
+  }
+  if (Array.isArray(value)) return value.map((item) => redactValueInner(item, undefined, secrets));
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = redactValue(v);
+      out[k] = redactValueInner(v, k, secrets);
     }
     return out;
   }
@@ -195,12 +251,17 @@ export class ReqportClient {
     }
     if (idempotent) h["Idempotency-Key"] = randomUUID();
 
+    // One attempt. This client does not retry a lost response. A second POST
+    // of an ARM release id is ARM_RELEASE_REPLAYED even when the first call
+    // already committed.
     let res: Response;
     try {
       res = await fetch(this.url(path), { ...rest, headers: h });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      throw new Error(`Network error calling ${this.url(path)}: ${msg}`);
+      const releaseHeader = h[ARM_RELEASE_ID_HEADER];
+      const scrubbed = releaseHeader ? msg.split(releaseHeader).join(displayReleaseId(releaseHeader)) : msg;
+      throw new Error(redactReleaseIdText(redactSecrets(`Network error calling ${this.url(path)}: ${scrubbed}`)));
     }
 
     if (!res.ok) {
@@ -243,7 +304,7 @@ export class ReqportClient {
       res = await fetch(this.url(path), { ...rest, headers: h });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      throw new Error(`Network error calling ${this.url(path)}: ${msg}`);
+      throw new Error(redactReleaseIdText(redactSecrets(`Network error calling ${this.url(path)}: ${msg}`)));
     }
 
     if (!res.ok) {
@@ -454,6 +515,48 @@ export class ReqportClient {
       `/v1/requests/${encodeURIComponent(id)}/response`,
       { method: "POST", idempotent: true, body: JSON.stringify(submission) }
     );
+  }
+
+  /**
+   * POST /v3/workflows/{id}/respond — the encrypted formal respond.
+   *
+   * Vanta requires `X-Reqport-Arm-Release-Id` on this call. The id is the one
+   * captured from a released disposition (`AUTO_RELEASE` or human `RELEASED`).
+   * Callers must not invoke this for HOLD or DECLINE.
+   *
+   * Single attempt, and no Idempotency-Key. `idempotent: true` would mint a new
+   * key on every call, so a blind retry after a lost response is a new attempt
+   * and comes back as ARM_RELEASE_REPLAYED even though the answer went through.
+   * This method does not retry. A REPLAYED response means already submitted —
+   * check the request status.
+   */
+  async respondFormalV3(
+    workflowInstanceId: string,
+    body: FormalRespondRequest,
+    releaseId: string
+  ): Promise<FormalRespondResult> {
+    const id = releaseId.trim();
+    if (!id) {
+      throw new Error("Formal respond requires an ARM release id.");
+    }
+    try {
+      return await this.request<FormalRespondResult>(
+        `/v3/workflows/${encodeURIComponent(workflowInstanceId)}/respond`,
+        {
+          method: "POST",
+          headers: { [ARM_RELEASE_ID_HEADER]: id },
+          body: JSON.stringify(body),
+        }
+      );
+    } catch (e) {
+      if (e instanceof ReqportApiError) throw e;
+      const msg = e instanceof Error ? e.message : String(e);
+      const shown = isApiKeyMaterial(id) ? "[redacted]" : displayReleaseId(id);
+      const scrubbed = redactReleaseIdText(redactSecrets(msg.split(id).join(shown)));
+      throw new Error(
+        `${scrubbed} The formal respond was not retried. If it already committed, check the request status; a second attempt is ARM_RELEASE_REPLAYED.`
+      );
+    }
   }
 
   /**

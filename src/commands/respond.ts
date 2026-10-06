@@ -19,7 +19,7 @@ import {
   type RespondInput,
 } from "../core.js";
 import type { AccountInstrument } from "../types.js";
-import { serverDecision } from "../armSurface.js";
+import { displayReleaseId, serverDecision } from "../armSurface.js";
 import { line, printJson } from "../ui.js";
 
 export type RespondCliOptions = {
@@ -153,14 +153,22 @@ export async function runRespond(
     printJson(outcome);
     return 0;
   }
-  const decision = serverDecision(outcome.result);
+  // When a formal v3 respond ran, only its status may be called released.
+  // A gate AUTO_RELEASE is not, by itself, a sealed-and-sent claim.
+  const decision = outcome.formal
+    ? serverDecision({ status: outcome.formal.status })
+    : serverDecision(outcome.result);
+  const shownStatus = outcome.formal ? outcome.formal.status : outcome.result.status;
   line("");
   line(`Submitted via /v1/requests/{id}/${outcome.endpoint}`);
-  line(`  result status: ${outcome.result.status ?? "(no status)"}`);
+  line(`  result status: ${shownStatus ?? "(no status)"}`);
   if (typeof outcome.result.approvalState === "string" && outcome.result.approvalState) {
     line(`  approval:      ${outcome.result.approvalState}`);
   }
   if (outcome.result.messageId) line(`  message id:    ${outcome.result.messageId}`);
+  if (typeof outcome.result.releaseId === "string" && outcome.result.releaseId && outcome.formal) {
+    line(`  release id:    ${displayReleaseId(outcome.result.releaseId)}`);
+  }
   if (decision === "held") {
     line("  Awaiting approval. Review it with `qp pending list`.");
   } else if (decision === "declined") {

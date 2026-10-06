@@ -16,9 +16,10 @@
 import { ReqportClient } from "../client.js";
 import { type ReqportEnv } from "../env.js";
 import { requireResponderCredential } from "../auth/session.js";
-import { serverDecision } from "../armSurface.js";
+import { displayReleaseId, releasedArmReleaseId, serverDecision } from "../armSurface.js";
+import { forwardArmRelease } from "../core.js";
 import { confirm, line, printJson, table } from "../ui.js";
-import type { PendingActionResult, PendingResponse } from "../types.js";
+import type { FormalRespondResult, PendingActionResult, PendingResponse } from "../types.js";
 
 async function clientFor(env: ReqportEnv): Promise<ReqportClient> {
   return new ReqportClient({ env, credential: await requireResponderCredential() });
@@ -87,13 +88,50 @@ export async function runPendingApprove(
   }
   const client = await clientFor(env);
   const res = await client.approvePendingResponse(id);
+  const formal = await forwardHumanRelease(client, id, res);
 
   if (opts.json) {
-    printJson(res);
+    printJson(formal ? { ...res, formal } : res);
     return 0;
   }
-  renderPendingDecision("approve", id, res);
+  // Formal delivery status stands alone. Do not mix it with the gate's
+  // AUTO_RELEASE / RELEASED tokens, or a non-release formal status would
+  // still be described as sealed and sent.
+  renderPendingDecision(
+    "approve",
+    id,
+    formal
+      ? {
+          id: res.id ?? id,
+          status: formal.status,
+          messageId: res.messageId,
+          requestId: res.requestId,
+        }
+      : res
+  );
   return 0;
+}
+
+/**
+ * Human RELEASED approve: capture releaseId and post the v3 formal respond
+ * with the header. No releaseId means the server finished inline (no header).
+ * A releaseId without a request id cannot be forwarded, and is not described
+ * as sealed and sent.
+ */
+async function forwardHumanRelease(
+  client: ReqportClient,
+  pendingId: string,
+  res: PendingActionResult
+): Promise<FormalRespondResult | undefined> {
+  const releaseId = releasedArmReleaseId(res);
+  if (!releaseId) return undefined;
+  const requestId = typeof res.requestId === "string" ? res.requestId.trim() : "";
+  if (!requestId) {
+    throw new Error(
+      `Server released pending response ${pendingId} but the approve body had no requestId (release ${displayReleaseId(releaseId)}). The formal respond was not sent.`
+    );
+  }
+  return forwardArmRelease(client, requestId, res);
 }
 
 export async function runPendingReject(

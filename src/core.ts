@@ -4,6 +4,7 @@
  */
 
 import { readFile } from "node:fs/promises";
+import { releasedArmReleaseId } from "./armSurface.js";
 import { ReqportApiError, ReqportClient } from "./client.js";
 import {
   FIR_ABOUT_PARTIES,
@@ -38,6 +39,8 @@ import {
   type FirResponseOutcome,
   type FirSubmitResponseRequest,
   type FirUpdateRequest,
+  type FormalRespondRequest,
+  type FormalRespondResult,
   type KycRecordStatus,
   type KycResponseSubmission,
   type KycResponseView,
@@ -277,7 +280,61 @@ export type RespondOutcome = {
   requestId: string;
   submitted: Record<string, unknown>;
   result: ResponseResult;
+  /**
+   * Set when the gate was released and carried a releaseId, after
+   * POST /v3/workflows/{id}/respond succeeded with that id in the header.
+   */
+  formal?: FormalRespondResult;
 };
+
+/**
+ * After a ruleset gate (POST /v1/requests/{id}/response, or the typed respond
+ * that shares that contract) or a human RELEASED approve, post the v3 formal
+ * respond with `X-Reqport-Arm-Release-Id` when — and only when — the server
+ * released and returned a releaseId.
+ *
+ * HOLD and DECLINE return undefined and do not call vanta. A missing releaseId
+ * on an older released body also skips the call, so servers that do not yet
+ * emit releaseId keep the single-call path.
+ */
+/**
+ * The gate's shape object, or undefined. This does not copy `slug` /
+ * `itemModes` / `presence` into a new object — the formal body carries the
+ * same value the gate stored.
+ */
+function unchangedGateShape(value: unknown): FormalRespondRequest["shape"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  return value as FormalRespondRequest["shape"];
+}
+
+export async function forwardArmRelease(
+  client: ReqportClient,
+  workflowInstanceId: string,
+  gate: {
+    disposition?: unknown;
+    status?: unknown;
+    approvalState?: unknown;
+    action?: unknown;
+    releaseId?: unknown;
+    messageId?: unknown;
+    payloadId?: unknown;
+    shape?: unknown;
+  },
+  hints?: { nfou?: boolean; payloadId?: string }
+): Promise<FormalRespondResult | undefined> {
+  const releaseId = releasedArmReleaseId(gate);
+  if (!releaseId) return undefined;
+  const fromGate = typeof gate.payloadId === "string" ? gate.payloadId.trim() : "";
+  const payloadId = (hints?.payloadId?.trim() || fromGate) || undefined;
+  const messageId = typeof gate.messageId === "string" ? gate.messageId.trim() : "";
+  const shape = unchangedGateShape(gate.shape);
+  const body: FormalRespondRequest = {};
+  if (shape) body.shape = shape;
+  if (hints?.nfou) body.nfou = true;
+  if (messageId) body.correlationId = messageId;
+  if (payloadId) body.responsePayload = { payloadId, purpose: "RESPONSE" };
+  return client.respondFormalV3(workflowInstanceId, body, releaseId);
+}
 
 /**
  * Decide the endpoint from the workflow type and submit the answer. Reused by
@@ -316,12 +373,17 @@ export async function performRespond(
       }
     }
     const result = await client.submitBusinessRelationshipResponse(id, answer as never);
+    const formal = await forwardArmRelease(client, id, result, {
+      nfou: hasRelationship === false,
+      payloadId: input.payloadId,
+    });
     return {
       endpoint: "business-relationship-response",
       workflowType: workflow.workflowType,
       requestId: id,
       submitted: answer,
       result,
+      ...(formal ? { formal } : {}),
     };
   }
 
@@ -335,6 +397,7 @@ export async function performRespond(
     const answer: Record<string, unknown> = { statement: input.statement };
     if (input.note) answer.note = input.note;
     const result = await client.submitTransactionHistoryResponse(id, answer as never);
+    const formal = await forwardArmRelease(client, id, result, { payloadId: input.payloadId });
     return {
       endpoint: "transaction-history-response",
       workflowType: workflow.workflowType,
@@ -343,6 +406,7 @@ export async function performRespond(
       // and carry subject data); the server validated + sealed it.
       submitted: { statement: "(camt.053-CA statement)", ...(input.note ? { note: input.note } : {}) },
       result,
+      ...(formal ? { formal } : {}),
     };
   }
 
@@ -398,6 +462,10 @@ export async function performRespond(
     );
   }
   const result = await client.submitResponse(id, submission);
+  const formal = await forwardArmRelease(client, id, result, {
+    nfou: status === "NFOU",
+    payloadId: input.payloadId,
+  });
   const submitted: Record<string, unknown> = { ...submission };
   if (input.statement !== undefined) {
     // The wire body carried the statement; don't echo subject data back.
@@ -409,6 +477,7 @@ export async function performRespond(
     requestId: id,
     submitted,
     result,
+    ...(formal ? { formal } : {}),
   };
 }
 
@@ -823,6 +892,9 @@ export type KycRespondInput = {
  * an inline record is given, spot-validates its enums; guards against supplying
  * BOTH an inline record and a payload_id (the server uses the payload_id and
  * ignores the record). Shared by the CLI `qp kyc respond` command and the MCP tool.
+ *
+ * KYC is not an ARM release-id path. This function does not read a release id
+ * and does not call the v3 formal respond.
  */
 export async function performKycRespond(
   client: ReqportClient,

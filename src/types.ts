@@ -359,6 +359,64 @@ export type ResponseResult = {
   status?: string;
   itemCount?: number;
   createdAt?: string;
+  /**
+   * Present when the ruleset (or a human release) actually released the answer.
+   * Forwarded as `X-Reqport-Arm-Release-Id` on the v3 formal respond. Absent on HOLD/DECLINE.
+   */
+  releaseId?: string;
+  /** Pre-sealed response payload the formal v3 respond should bind, when the gate returns one. */
+  payloadId?: string;
+  approvalState?: string;
+  action?: string;
+  /**
+   * Wire decision from the release gate. Preferred over status / approvalState / action.
+   * AUTO_RELEASE or RELEASED when the answer may be formally sent. HOLD and DECLINE
+   * omit releaseId and shape.
+   */
+  disposition?: string;
+  /**
+   * Shape the gate stored for this release (`slug`, `itemModes`, `presence`, and
+   * any other fields). Forwarded unchanged on the v3 formal respond.
+   */
+  shape?: ArmReleaseShape;
+  reason?: string;
+  [k: string]: unknown;
+};
+
+/**
+ * Answer shape stored by the ARM release gate. The formal respond repeats this
+ * object as the gate returned it. The client does not rebuild slug, itemModes,
+ * or presence.
+ */
+export type ArmReleaseShape = {
+  slug: string;
+  itemModes: unknown;
+  presence: unknown;
+  [k: string]: unknown;
+};
+
+/**
+ * POST /v3/workflows/{workflowInstanceId}/respond — the encrypted formal respond.
+ * Payload bindings are optional; the thin client sends them only when it already
+ * has a payload id. The release id travels in the header, not this body.
+ */
+export type FormalRespondRequest = {
+  /** Gate shape, unchanged. Absent on HOLD/DECLINE because those calls are not made. */
+  shape?: ArmReleaseShape;
+  responsePayload?: {
+    payloadId: string;
+    purpose?: string;
+    attestationJws?: string;
+  };
+  nfou?: boolean;
+  correlationId?: string;
+};
+
+/** POST /v3/workflows/{id}/respond result (workflow status after the formal respond). */
+export type FormalRespondResult = {
+  workflowInstanceId?: string;
+  status?: string;
+  updatedAt?: string;
   [k: string]: unknown;
 };
 
@@ -471,6 +529,15 @@ export type PendingActionResult = {
   status?: string;
   messageId?: string;
   requestId?: string;
+  /** Set when a human approve actually releases. Forwarded on the v3 formal respond. */
+  releaseId?: string;
+  approvalState?: string;
+  action?: string;
+  disposition?: string;
+  /** Gate shape to repeat on the formal respond. Not present on HOLD/DECLINE. */
+  shape?: ArmReleaseShape;
+  reason?: string;
+  payloadId?: string;
   [k: string]: unknown;
 };
 
