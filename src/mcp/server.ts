@@ -31,7 +31,6 @@ import {
   performFirNotify,
   performFirRespond,
   performKycRespond,
-  performPendingApprove,
   performRespond,
   readFirCase,
   readKycResponse,
@@ -650,12 +649,12 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
     {
       title: "Approve a held response",
       description:
-        "Ask the server to release a held response via POST /v1/responses/pending/{id}/approve (scope responses:write). When the approve body is a released decision with releaseId, the same v3 formal respond as qp respond follows, with X-Reqport-Arm-Release-Id. Free-text and unstructured authority response types never request a release id. A missing releaseId means the server finished inline. A ruleset HOLD or decline, HTTP 409 ARM_RELEASE_HELD_REPLACED, HTTP 409 ARM_RELEASE_HELD_ALREADY_DECIDED, or HTTP 403 ARM_STRUCTURED_NOT_ENABLED is returned unchanged — never turned into a local release. Irreversible when the server releases. " +
+        "Ask the server to release a held response via POST /v1/responses/pending/{id}/approve (scope responses:write). Seal + send happen only when the server releases it. A ruleset HOLD or decline, or HTTP 403 ARM_STRUCTURED_NOT_ENABLED, is returned unchanged — never turned into a local release. Irreversible when the server releases. " +
         ARM_SURFACE_BRIEF,
       inputSchema: { env: envSchema, id: z.string().describe("Pending response id.") },
     },
     async ({ env, id }) =>
-      executeTool(env ?? defaultEnv, (client) => performPendingApprove(client, id))
+      executeTool(env ?? defaultEnv, (client) => client.approvePendingResponse(id))
   );
 
   server.registerTool(

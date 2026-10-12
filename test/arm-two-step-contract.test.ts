@@ -292,7 +292,7 @@ describe("pending queue matches the held-response view", () => {
     assertReleaseIdHidden(jsonIo.stdout(), releaseId);
   });
 
-  it("MCP approve forwards a structured release id and skips free-text", async () => {
+  it("qp pending approve forwards a structured release id and skips free-text", async () => {
     const releaseId = syntheticReleaseId("mcp-approve");
     const requestId = "req-mcp-approve";
     const structured = mockVanta(({ url, method }) => {
