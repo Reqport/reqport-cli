@@ -592,6 +592,18 @@ export class ReqportClient {
   }
 
   /**
+   * GET /v1/responses/pending/{id} — one held row in any status. The body is a
+   * list row and does not carry a release id. A missing id and another org's
+   * row are the same 404. Decided rows stay readable after a 409.
+   */
+  getPendingResponse(id: string): Promise<PendingResponse> {
+    return this.request<PendingResponse>(
+      `/v1/responses/pending/${encodeURIComponent(id)}`,
+      { method: "GET" }
+    );
+  }
+
+  /**
    * POST /v1/responses/pending/{id}/approve — release a held response; the seal
    * + send happens server-side (scope responses:write).
    */

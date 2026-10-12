@@ -4,7 +4,7 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { releasedArmReleaseId } from "./armSurface.js";
+import { displayReleaseId, isDirectFreeTextWorkflow, releasedArmReleaseId } from "./armSurface.js";
 import { ReqportApiError, ReqportClient } from "./client.js";
 import {
   FIR_ABOUT_PARTIES,
@@ -44,6 +44,7 @@ import {
   type KycRecordStatus,
   type KycResponseSubmission,
   type KycResponseView,
+  type PendingActionResult,
   type PayloadMetaResponse,
   type RelationshipType,
   type ResponseResult,
@@ -296,6 +297,10 @@ export type RespondOutcome = {
  * HOLD and DECLINE return undefined and do not call vanta. A missing releaseId
  * on an older released body also skips the call, so servers that do not yet
  * emit releaseId keep the single-call path.
+ *
+ * Free-text / UAR workflow types never reach this function. ADR 0005 leaves
+ * them ungated: the direct submit is the whole send, and this client does not
+ * request a release id for them whatever the org's ARM flag.
  */
 /**
  * The gate's shape object, or undefined. This does not copy `slug` /
@@ -337,6 +342,46 @@ export async function forwardArmRelease(
 }
 
 /**
+ * Forward a released gate only for structured workflow types.
+ * Direct free-text / UAR types return undefined and do not call v3.
+ */
+async function forwardStructuredArmRelease(
+  client: ReqportClient,
+  workflowType: string | undefined,
+  workflowInstanceId: string,
+  gate: Parameters<typeof forwardArmRelease>[2],
+  hints?: { nfou?: boolean; payloadId?: string }
+): Promise<FormalRespondResult | undefined> {
+  if (isDirectFreeTextWorkflow(workflowType)) return undefined;
+  return forwardArmRelease(client, workflowInstanceId, gate, hints);
+}
+
+/**
+ * Human approve. A released body that carries releaseId is posted to the v3
+ * formal respond, except for free-text / UAR response types, which never
+ * request a release id. No releaseId means the server finished inline.
+ * A releaseId without a request id cannot be forwarded.
+ */
+export async function performPendingApprove(
+  client: ReqportClient,
+  pendingId: string
+): Promise<PendingActionResult & { formal?: FormalRespondResult }> {
+  const result = await client.approvePendingResponse(pendingId);
+  const responseType = typeof result.responseType === "string" ? result.responseType : undefined;
+  if (isDirectFreeTextWorkflow(responseType)) return result;
+  const releaseId = releasedArmReleaseId(result);
+  if (!releaseId) return result;
+  const requestId = typeof result.requestId === "string" ? result.requestId.trim() : "";
+  if (!requestId) {
+    throw new Error(
+      `Server released pending response ${pendingId} but the approve body had no requestId (release ${displayReleaseId(releaseId)}). The formal respond was not sent.`
+    );
+  }
+  const formal = await forwardArmRelease(client, requestId, result);
+  return formal ? { ...result, formal } : result;
+}
+
+/**
  * Decide the endpoint from the workflow type and submit the answer. Reused by
  * the CLI `respond` command and the MCP tool.
  */
@@ -373,7 +418,7 @@ export async function performRespond(
       }
     }
     const result = await client.submitBusinessRelationshipResponse(id, answer as never);
-    const formal = await forwardArmRelease(client, id, result, {
+    const formal = await forwardStructuredArmRelease(client, workflow.workflowType, id, result, {
       nfou: hasRelationship === false,
       payloadId: input.payloadId,
     });
@@ -397,7 +442,9 @@ export async function performRespond(
     const answer: Record<string, unknown> = { statement: input.statement };
     if (input.note) answer.note = input.note;
     const result = await client.submitTransactionHistoryResponse(id, answer as never);
-    const formal = await forwardArmRelease(client, id, result, { payloadId: input.payloadId });
+    const formal = await forwardStructuredArmRelease(client, workflow.workflowType, id, result, {
+      payloadId: input.payloadId,
+    });
     return {
       endpoint: "transaction-history-response",
       workflowType: workflow.workflowType,
@@ -462,7 +509,7 @@ export async function performRespond(
     );
   }
   const result = await client.submitResponse(id, submission);
-  const formal = await forwardArmRelease(client, id, result, {
+  const formal = await forwardStructuredArmRelease(client, workflow.workflowType, id, result, {
     nfou: status === "NFOU",
     payloadId: input.payloadId,
   });

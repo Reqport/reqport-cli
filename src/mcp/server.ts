@@ -31,6 +31,7 @@ import {
   performFirNotify,
   performFirRespond,
   performKycRespond,
+  performPendingApprove,
   performRespond,
   readFirCase,
   readKycResponse,
@@ -621,7 +622,7 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
     {
       title: "List held responses",
       description:
-        "List this org's responses held for approval via GET /v1/responses/pending (scope responses:read). Returns id, requestId, responseType, auth002Status, submitter, createdAt. A hold is the server's decision; this tool does not release it.",
+        "List this org's PENDING and REPLACED held responses via GET /v1/responses/pending (scope responses:read). Rows include status, label, submittedBy (older bodies used submitter), requestId, responseType, auth002Status, and createdAt. A list row has no release id. A hold is the server's decision; this tool does not release it.",
       inputSchema: { env: envSchema },
     },
     async ({ env }) => {
@@ -634,16 +635,27 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
   );
 
   server.registerTool(
+    "reqport_pending_show",
+    {
+      title: "Fetch one held response",
+      description:
+        "Fetch one held response via GET /v1/responses/pending/{id} (scope responses:read), in any status: PENDING, REPLACED, APPROVED, REJECTED, WITHDRAWN, or DECLINED. Decided rows stay readable after a 409. The body is one list row and has no release id. A missing id and another org's row are the same 404.",
+      inputSchema: { env: envSchema, id: z.string().describe("Pending response id.") },
+    },
+    async ({ env, id }) => executeTool(env ?? defaultEnv, (client) => client.getPendingResponse(id))
+  );
+
+  server.registerTool(
     "reqport_pending_approve",
     {
       title: "Approve a held response",
       description:
-        "Ask the server to release a held response via POST /v1/responses/pending/{id}/approve (scope responses:write). Seal + send happen only when the server releases it. A ruleset HOLD or decline, or HTTP 403 ARM_STRUCTURED_NOT_ENABLED, is returned unchanged — never turned into a local release. Irreversible when the server releases. " +
+        "Ask the server to release a held response via POST /v1/responses/pending/{id}/approve (scope responses:write). When the approve body is a released decision with releaseId, the same v3 formal respond as qp respond follows, with X-Reqport-Arm-Release-Id. Free-text and unstructured authority response types never request a release id. A missing releaseId means the server finished inline. A ruleset HOLD or decline, HTTP 409 ARM_RELEASE_HELD_REPLACED, HTTP 409 ARM_RELEASE_HELD_ALREADY_DECIDED, or HTTP 403 ARM_STRUCTURED_NOT_ENABLED is returned unchanged — never turned into a local release. Irreversible when the server releases. " +
         ARM_SURFACE_BRIEF,
       inputSchema: { env: envSchema, id: z.string().describe("Pending response id.") },
     },
     async ({ env, id }) =>
-      executeTool(env ?? defaultEnv, (client) => client.approvePendingResponse(id))
+      executeTool(env ?? defaultEnv, (client) => performPendingApprove(client, id))
   );
 
   server.registerTool(

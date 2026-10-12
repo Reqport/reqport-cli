@@ -39,11 +39,14 @@ SETUP (responder)
    Authority -> POST /v1/requests/{brId}/transaction-history-followup (instrument + timespan)
    Authority -> POST /v1/requests/{brId}/kyc-followup
    Authority -> POST /v1/requests/{brId}/information-followup (free-text ask)
-   You       -> answer; the SAME outbound gating applies.
-   Typical: follow-ups are HELD for a human (no rule releases them).
+   You       -> answer; the SAME outbound gating applies to structured follow-ups.
+   Typical: structured follow-ups are HELD for a human (no rule releases them).
    A BR "true" (with or without the optional accounts) may still not be enough:
    the free-text INFORMATION follow-up asks for more in plain language, answered
    on the generic response path (qp respond --status COMP --free-text "...").
+   Free-text / UAR types (UNSTRUCTURED_AUTHORITY_REQUEST_V1, UNSTRUCTURED_REQUEST_V1,
+   AUTHORITY_REQUEST_V1, information) are never release-id gated. The CLI posts
+   them directly and does not request a release id, whatever the org's ARM flag.
 
 ALTERNATE ENTRY — you ALREADY hold the identifier (start later in the flow)
    When the authority already has a wallet/account (from another investigation,
@@ -60,7 +63,8 @@ ALTERNATE ENTRY — you ALREADY hold the identifier (start later in the flow)
    Unknown holder (which company holds this wallet?) is holder-discovery — separate.
 
 HUMAN-IN-THE-LOOP
-  qp pending list                 see held answers awaiting approval
+  qp pending list                 PENDING and REPLACED rows (status, label, submittedBy)
+  qp pending show <id>            one row, any status; the body has no release id
   qp pending approve <id>         ask the server to release (sealed + sent only if it does)
   qp pending reject <id>          decline (the authority sees the decline + reason)
   Nothing reaches the authority until the server releases it.

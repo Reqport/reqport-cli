@@ -134,6 +134,12 @@ Key points:
   still not be enough — a **free-text information** request (`information-followup`,
   or standalone `POST /v1/requests/information`) asks for more in plain language,
   answered on the generic response path (`qp respond --status COMP --free-text`).
+  Free-text / UAR types (`UNSTRUCTURED_AUTHORITY_REQUEST_V1`,
+  `UNSTRUCTURED_REQUEST_V1`, `AUTHORITY_REQUEST_V1` / `information`, including
+  `INFORMATION_FOLLOWUP` and `edge.information.v1`) are never release-id gated.
+  The CLI posts those answers directly and does not request a release id, whatever
+  the org's `authorityArmEnabled` flag. Structured answers still use the two-step
+  when the server returns a released `releaseId`.
 - **Identifier-first entry:** when the authority *already* holds the identifier (a
   wallet from another investigation), it skips the BR check and asks a known holder
   directly (`POST /v1/requests/transaction-history` | `/kyc`, no `relatesTo`). You
@@ -192,7 +198,7 @@ Key points:
 
    Under **outbound gating** every submitted answer is *held* for approval unless a
    rule releases it (see the ARM flow above). Manage the hold queue with
-   `qp pending list|approve|reject|withdraw`, and the outbound-gating rules with
+   `qp pending list|show|approve|reject|withdraw`, and the outbound-gating rules with
    `qp requestor-ruleset get|add|set|clear` (inspect a requestor's verified status
    first with `qp org-states <orgId>`). And `qp arm` prints this whole flow.
 
