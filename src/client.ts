@@ -109,7 +109,10 @@ export class ReqportApiError extends Error {
     this.parsedBody = redactedParsed;
   }
 
-  /** Stable machine code when the body carries `code`, `error`, or `errorCode`. */
+  /**
+   * Stable machine code from a top-level `code`, a string `error`, a top-level
+   * `errorCode`, or a nested `error.code` object (vanta envelope).
+   */
   get code(): string | undefined {
     return stableErrorCode(this.parsedBody);
   }
@@ -197,12 +200,30 @@ function parseErrorBody(body: string): unknown {
   }
 }
 
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+/**
+ * Machine code from a vanta error body.
+ *
+ * Legacy shapes win when they are present: top-level `code`, then a string
+ * `error`, then top-level `errorCode`. A string `error` stays that code.
+ * vanta#335 sends an object instead, `{ error: { code, message } }`, with no
+ * details. That object's `code` is used when the legacy fields are absent.
+ */
 function stableErrorCode(parsed: unknown): string | undefined {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
   const rec = parsed as Record<string, unknown>;
-  if (typeof rec.code === "string" && rec.code) return rec.code;
-  if (typeof rec.error === "string" && rec.error) return rec.error;
-  if (typeof rec.errorCode === "string" && rec.errorCode) return rec.errorCode;
+  const code = nonEmptyString(rec.code);
+  if (code) return code;
+  const error = nonEmptyString(rec.error);
+  if (error) return error;
+  const errorCode = nonEmptyString(rec.errorCode);
+  if (errorCode) return errorCode;
+  if (rec.error && typeof rec.error === "object" && !Array.isArray(rec.error)) {
+    return nonEmptyString((rec.error as Record<string, unknown>).code);
+  }
   return undefined;
 }
 
@@ -422,6 +443,10 @@ export class ReqportClient {
    * POST /v1/payloads/decrypt-batch — the TEE mints a capability, downloads the
    * ciphertext, decrypts it, and returns base64 plaintext to an authorized
    * caller (scope payloads:read). Max 20 payloadIds per call.
+   *
+   * A non-2xx refusal, including 403 CONTENT_ACCESS_DENIED, fails this whole
+   * call. Callers report that one error. The batch is not split into per-id
+   * retries or per-id messages. A mismatch and an unknown id share one body.
    */
   decryptBatch(payloadIds: string[]): Promise<DecryptBatchResponse> {
     if (payloadIds.length === 0) return Promise.resolve({ items: [] });
