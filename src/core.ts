@@ -83,7 +83,10 @@ function decodeItem(
   return { payloadId, ok: true, contentType, text, json };
 }
 
-/** Decrypt up to 20 payloads and return decoded results in request order. */
+/**
+ * Decrypt up to 20 payloads and return decoded results in request order.
+ * A refused decrypt-batch rejects once for the whole list.
+ */
 export async function decodePayloads(
   client: ReqportClient,
   payloadIds: string[]

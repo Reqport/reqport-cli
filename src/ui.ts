@@ -60,11 +60,20 @@ export function table(headers: string[], rows: string[][]): string {
 }
 
 /**
+ * Human copy for 403 CONTENT_ACCESS_DENIED. The server message and any payload
+ * ids stay in the JSON envelope; this sentence is the whole human explanation.
+ * The stored session is left as it is — this refusal is not a bad credential.
+ */
+const CONTENT_ACCESS_DENIED_MESSAGE =
+  "You don't have access to this content. If you think you should, contact your administrator.";
+
+/**
  * Turn any thrown value into a message safe to print.
  *
  * A body that carries a stable `code` (ARM_STRUCTURED_NOT_ENABLED,
  * ARM_INFORMATION_STRUCTURED_FIELDS, ruleset reject-steer, …) is rendered as
  * HTTP status plus that JSON. It is not rewritten as a scope error or as HOLD.
+ * CONTENT_ACCESS_DENIED is the exception: one fixed sentence, with no scope hint.
  */
 function contractMessage(body: unknown): string | undefined {
   if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
@@ -74,6 +83,9 @@ function contractMessage(body: unknown): string | undefined {
 
 export function explainError(e: unknown): string {
   if (e instanceof ReqportApiError) {
+    if (e.code === "CONTENT_ACCESS_DENIED") {
+      return CONTENT_ACCESS_DENIED_MESSAGE;
+    }
     if (e.code) {
       const envelope = apiErrorEnvelope(e);
       const json = JSON.stringify(envelope.body, null, 2);
