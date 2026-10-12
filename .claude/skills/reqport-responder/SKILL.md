@@ -346,15 +346,24 @@ npx @reqport/cli mcp        # REQPORT_API_KEY + REQPORT_ENV from the environment
 Tools: `reqport_doctor`, `reqport_list_requests`, `reqport_show_request`,
 `reqport_decrypt_payloads`, `reqport_respond_business_relationship` (accepts
 `relationshipTypes`), `reqport_respond`, the human-in-the-loop tools
-`reqport_pending_list`, `reqport_pending_approve`, `reqport_pending_reject`,
-`reqport_pending_withdraw`, the FIR tools `reqport_fir_list`,
-`reqport_fir_show`, `reqport_fir_notify`, `reqport_fir_respond`,
-`reqport_fir_instruct_refund`, `reqport_fir_confirm_refund`,
+`reqport_pending_list`, `reqport_pending_show`, `reqport_pending_approve`,
+`reqport_pending_send`, `reqport_pending_reject`, `reqport_pending_withdraw`,
+the FIR tools `reqport_fir_list`, `reqport_fir_show`, `reqport_fir_notify`,
+`reqport_fir_respond`, `reqport_fir_instruct_refund`, `reqport_fir_confirm_refund`,
 `reqport_fir_identity_request`, `reqport_fir_identity_respond`, and the KYC/CDD tools
 `reqport_kyc_list`, `reqport_kyc_show`, `reqport_kyc_respond` (bodies snake_case).
 Each accepts an optional `env`; the credential comes from the
 server process environment. The MCP server is **API-key-only** — `qp login` is a
 human/CLI concern and is not exposed as a tool.
+
+`reqport_pending_approve` only calls `POST /v1/responses/pending/{id}/approve`.
+It never sends. On a structured release the result includes the release id
+redacted as elsewhere, the release window, and the next step.
+`reqport_pending_send` posts the irreversible v3 formal respond with
+`X-Reqport-Arm-Release-Id`. It requires `confirm: true` and the request id
+echoed by approve. The send is irreversible and the release id can be used
+only once. Free-text and UAR types are not release-id gated and that tool
+refuses them. `qp pending approve` stays the combined approve-then-send command.
 
 ## Definition of done
 

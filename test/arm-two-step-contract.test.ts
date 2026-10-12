@@ -7,11 +7,21 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ReqportApiError } from "../src/client.js";
-import { performPendingApprove, performRespond } from "../src/core.js";
+import { ReqportApiError, ReqportClient } from "../src/client.js";
+import {
+  clearHeldArmReleases,
+  performPendingApprove,
+  performPendingApproveOnly,
+  performPendingSend,
+  performRespond,
+} from "../src/core.js";
 import { runPendingApprove, runPendingList, runPendingShow } from "../src/commands/pending.js";
 import { runRespond } from "../src/commands/respond.js";
-import { executeTool } from "../src/mcp/server.js";
+import {
+  executeTool,
+  PENDING_APPROVE_TOOL_DESCRIPTION,
+  PENDING_SEND_TOOL_DESCRIPTION,
+} from "../src/mcp/server.js";
 import { isDirectFreeTextWorkflow } from "../src/armSurface.js";
 import { explainError } from "../src/ui.js";
 import { ARM_RELEASE_ID_GATE, syntheticReleaseId } from "./fixtures/arm-release-id-gate.js";
@@ -100,11 +110,20 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearHeldArmReleases();
   cleanupConfigDir(dir);
   clearEnvKnobs();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+
+function testClient(): ReqportClient {
+  return new ReqportClient({
+    env: "sandbox",
+    baseUrl: BASE,
+    credential: { value: API_KEY, kind: "apikey" },
+  });
+}
 
 describe("direct free-text never requests a release id", () => {
   it("classifies the ADR 0005 types and leaves structured types on the two-step path", () => {
@@ -380,5 +399,296 @@ describe("pending queue matches the held-response view", () => {
       expect(calls.some((c) => c.url.includes("/v3/"))).toBe(false);
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("MCP approve and send are separate", () => {
+  it("describes approve as approve-only and send as irreversible and single-use", () => {
+    expect(PENDING_APPROVE_TOOL_DESCRIPTION).toContain("POST /v1/responses/pending/{id}/approve");
+    expect(PENDING_APPROVE_TOOL_DESCRIPTION).toMatch(/never sends/);
+    expect(PENDING_APPROVE_TOOL_DESCRIPTION).not.toMatch(/Seal \+ send/);
+    expect(PENDING_SEND_TOOL_DESCRIPTION).toMatch(/irreversible/i);
+    expect(PENDING_SEND_TOOL_DESCRIPTION).toMatch(/can be used only once/);
+    expect(PENDING_SEND_TOOL_DESCRIPTION).toContain("X-Reqport-Arm-Release-Id");
+  });
+
+  it("reqport_pending_approve never posts v3 and returns the window and next step", async () => {
+    const releaseId = syntheticReleaseId("approve-only");
+    const requestId = "req-approve-only";
+    const calls = mockVanta(({ url, method }) => {
+      if (method === "POST" && url.endsWith("/v1/responses/pending/pend-only/approve")) {
+        return {
+          status: 200,
+          json: {
+            ...ARM_RELEASE_ID_GATE.released,
+            id: "pend-only",
+            releaseId,
+            requestId,
+            responseType: "BUSINESS_RELATIONSHIP_CHECK_V1",
+          },
+        };
+      }
+      return { status: 500, json: { code: "UNEXPECTED_TEST_ROUTE", url, method } };
+    });
+    const ok = await executeTool(undefined, (client) => performPendingApproveOnly(client, "pend-only"));
+    expect(ok).not.toHaveProperty("isError");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toContain("/v1/responses/pending/pend-only/approve");
+    expect(calls[0].releaseId).toBeUndefined();
+    expect(calls.some((c) => c.url.includes("/v3/"))).toBe(false);
+    const body = JSON.parse((ok as { content: { text: string }[] }).content[0].text) as {
+      releaseId?: string;
+      releaseWindow?: string;
+      nextStep?: string;
+      requestId?: string;
+    };
+    expect(body.releaseId).toBe("armrel_…");
+    expect(body.releaseWindow).toBe("2026-10-05T21:45:00Z (ttl 120s)");
+    expect(body.requestId).toBe(requestId);
+    expect(body.nextStep).toContain("reqport_pending_send");
+    expect(body.nextStep).toContain("confirm true");
+    expect(body.nextStep).toContain(requestId);
+    assertReleaseIdHidden((ok as { content: { text: string }[] }).content[0].text, releaseId);
+  });
+
+  it("refuses send without confirm and makes no network call", async () => {
+    const calls = mockVanta(() => ({ status: 500, json: { code: "SHOULD_NOT_CALL" } }));
+    const client = testClient();
+    const releaseId = syntheticReleaseId("no-confirm");
+    await expect(
+      performPendingSend(client, {
+        confirm: false,
+        requestId: "req-no-confirm",
+        responseType: "BUSINESS_RELATIONSHIP_CHECK_V1",
+        releaseId,
+      })
+    ).rejects.toThrow(/confirm: true/);
+    await expect(
+      performPendingSend(client, {
+        requestId: "req-no-confirm",
+        responseType: "BUSINESS_RELATIONSHIP_CHECK_V1",
+        releaseId,
+      })
+    ).rejects.toThrow(/confirm: true/);
+    const viaTool = await executeTool(undefined, (c) =>
+      performPendingSend(c, {
+        confirm: false,
+        requestId: "req-no-confirm",
+        responseType: "BUSINESS_RELATIONSHIP_CHECK_V1",
+        releaseId,
+      })
+    );
+    expect(viaTool).toMatchObject({ isError: true });
+    expect((viaTool as { content: { text: string }[] }).content[0].text).toMatch(/formal respond was not sent/i);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("send with confirm posts once with the release-id header", async () => {
+    const releaseId = syntheticReleaseId("send-once");
+    const requestId = "req-send-once";
+    const calls = mockVanta(({ url, method }) => {
+      if (method === "POST" && url.endsWith("/v1/responses/pending/pend-send/approve")) {
+        return {
+          status: 200,
+          json: {
+            ...ARM_RELEASE_ID_GATE.released,
+            id: "pend-send",
+            releaseId,
+            requestId,
+            responseType: "BUSINESS_RELATIONSHIP_CHECK_V1",
+          },
+        };
+      }
+      if (method === "POST" && url.endsWith(`/v3/workflows/${requestId}/respond`)) {
+        return { status: 200, json: { status: "RESPONDED" } };
+      }
+      return { status: 500, json: { code: "UNEXPECTED_TEST_ROUTE", url, method } };
+    });
+    const client = testClient();
+    const approved = await performPendingApproveOnly(client, "pend-send");
+    expect(approved.nextStep).toContain(requestId);
+    expect(calls.some((c) => c.url.includes("/v3/"))).toBe(false);
+
+    const sent = await executeTool(undefined, (c) =>
+      performPendingSend(c, {
+        confirm: true,
+        requestId,
+        responseType: "BUSINESS_RELATIONSHIP_CHECK_V1",
+      })
+    );
+    expect(sent).not.toHaveProperty("isError");
+    const v3 = calls.filter((c) => c.url.includes("/v3/"));
+    expect(v3).toHaveLength(1);
+    expect(v3[0].method).toBe("POST");
+    expect(v3[0].releaseId).toBe(releaseId);
+    expect(v3[0].body).toMatchObject({ shape: SHAPE });
+    const text = (sent as { content: { text: string }[] }).content[0].text;
+    expect(JSON.parse(text).status).toBe("RESPONDED");
+    assertReleaseIdHidden(text, releaseId);
+    assertReleaseIdHidden(approved.nextStep, releaseId);
+  });
+
+  it("surfaces a replayed release as 409 and an expired release as 403", async () => {
+    const cases = ["ARM_RELEASE_REPLAYED", "ARM_RELEASE_EXPIRED"] as const;
+    for (const code of cases) {
+      clearHeldArmReleases();
+      const spec = ARM_RELEASE_ID_GATE.refusals[code];
+      const releaseId = syntheticReleaseId(code);
+      const requestId = `req-${code}`;
+      const calls = mockVanta(({ url, method }) => {
+        if (method === "POST" && url.includes("/approve")) {
+          return {
+            status: 200,
+            json: {
+              ...ARM_RELEASE_ID_GATE.released,
+              id: `pend-${code}`,
+              releaseId,
+              requestId,
+              responseType: "BUSINESS_RELATIONSHIP_CHECK_V1",
+            },
+          };
+        }
+        if (method === "POST" && url.includes("/v3/")) {
+          return { status: spec.http, json: spec.body };
+        }
+        return { status: 500, json: { code: "UNEXPECTED_TEST_ROUTE", url, method } };
+      });
+      const client = testClient();
+      await performPendingApproveOnly(client, `pend-${code}`);
+      let thrown: unknown;
+      try {
+        await performPendingSend(client, {
+          confirm: true,
+          requestId,
+          responseType: "BUSINESS_RELATIONSHIP_CHECK_V1",
+        });
+      } catch (e) {
+        thrown = e;
+      }
+      const err = thrown as ReqportApiError;
+      expect(err).toBeInstanceOf(ReqportApiError);
+      expect(err.status).toBe(spec.http);
+      expect(err.code).toBe(code);
+      const explained = explainError(err);
+      expect(explained).toContain(spec.body.message);
+      expect(explained).toContain("not sealed or sent");
+      expect(explained).not.toMatch(/sealed and sent/i);
+      if (code === "ARM_RELEASE_REPLAYED") {
+        expect(explained).toContain("A release id is used once");
+      }
+      const v3 = calls.filter((c) => c.url.includes("/v3/"));
+      expect(v3).toHaveLength(1);
+      expect(v3[0].releaseId).toBe(releaseId);
+      assertReleaseIdHidden(explained, releaseId);
+
+      vi.unstubAllGlobals();
+      clearHeldArmReleases();
+      const mcpCalls = mockVanta(({ url, method }) => {
+        if (method === "POST" && url.includes("/approve")) {
+          return {
+            status: 200,
+            json: {
+              ...ARM_RELEASE_ID_GATE.released,
+              releaseId,
+              requestId,
+              responseType: "BUSINESS_RELATIONSHIP_CHECK_V1",
+            },
+          };
+        }
+        if (method === "POST" && url.includes("/v3/")) {
+          return { status: spec.http, json: spec.body };
+        }
+        return { status: 500, json: { code: "UNEXPECTED_TEST_ROUTE", url, method } };
+      });
+      await performPendingApproveOnly(testClient(), `pend-${code}`);
+      const mcp = await executeTool(undefined, (c) =>
+        performPendingSend(c, {
+          confirm: true,
+          requestId,
+          responseType: "BUSINESS_RELATIONSHIP_CHECK_V1",
+        })
+      );
+      expect(mcp).toMatchObject({ isError: true });
+      const text = (mcp as { content: { text: string }[] }).content[0].text;
+      const envelope = JSON.parse(text) as { httpStatus: number; body: { code: string; message: string } };
+      expect(envelope.httpStatus).toBe(spec.http);
+      expect(envelope.body.code).toBe(code);
+      expect(text).toContain("not sealed or sent");
+      expect(text).not.toMatch(/sealed and sent/i);
+      assertReleaseIdHidden(text, releaseId);
+      expect(mcpCalls.filter((c) => c.url.includes("/v3/"))).toHaveLength(1);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("never puts free-text or UAR types on either tool's gate path", async () => {
+    for (const responseType of DIRECT_TYPES) {
+      clearHeldArmReleases();
+      const releaseId = syntheticReleaseId(`free-${responseType}`);
+      const calls = mockVanta(({ url, method }) => {
+        if (method === "POST" && url.includes("/approve")) {
+          return {
+            status: 200,
+            json: {
+              disposition: "RELEASED",
+              releaseId,
+              requestId: "req-free-gate",
+              responseType,
+              shape: SHAPE,
+              expiresAt: "2026-10-05T21:45:00Z",
+              ttlSeconds: 120,
+            },
+          };
+        }
+        return { status: 500, json: { code: "UNEXPECTED_TEST_ROUTE", url, method } };
+      });
+      const client = testClient();
+      const approved = await performPendingApproveOnly(client, "pend-free-gate");
+      expect(calls.some((c) => c.url.includes("/v3/"))).toBe(false);
+      expect(approved.nextStep).toMatch(/not release-id gated/);
+      expect(approved.nextStep).toMatch(/Do not call reqport_pending_send/);
+      await expect(
+        performPendingSend(client, {
+          confirm: true,
+          requestId: "req-free-gate",
+          responseType,
+          releaseId,
+        })
+      ).rejects.toThrow(/not release-id gated/);
+      expect(calls).toHaveLength(1);
+      expect(calls.every((c) => c.releaseId === undefined)).toBe(true);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps --json release-id redaction on qp pending approve", async () => {
+    const releaseId = syntheticReleaseId("json-approve");
+    const requestId = "req-json-approve";
+    const calls = mockVanta(({ url, method }) => {
+      if (method === "POST" && url.endsWith("/v1/responses/pending/pend-json/approve")) {
+        return {
+          status: 200,
+          json: {
+            ...ARM_RELEASE_ID_GATE.released,
+            id: "pend-json",
+            releaseId,
+            requestId,
+            responseType: "BUSINESS_RELATIONSHIP_CHECK_V1",
+          },
+        };
+      }
+      if (method === "POST" && url.endsWith(`/v3/workflows/${requestId}/respond`)) {
+        return { status: 200, json: { status: "RESPONDED", releaseId } };
+      }
+      return { status: 500, json: { code: "UNEXPECTED_TEST_ROUTE", url, method } };
+    });
+    const io = captureIo();
+    expect(await runPendingApprove("sandbox", "pend-json", { yes: true, json: true })).toBe(0);
+    io.restore();
+    assertReleaseIdHidden(io.stdout(), releaseId);
+    const printed = JSON.parse(io.stdout()) as { releaseId?: string; formal?: { status?: string } };
+    expect(printed.releaseId).toBe("armrel_…");
+    expect(printed.formal?.status).toBe("RESPONDED");
+    expect(calls.find((c) => c.url.includes("/v3/"))?.releaseId).toBe(releaseId);
   });
 });

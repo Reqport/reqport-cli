@@ -31,6 +31,8 @@ import {
   performFirNotify,
   performFirRespond,
   performKycRespond,
+  performPendingApproveOnly,
+  performPendingSend,
   performRespond,
   readFirCase,
   readKycResponse,
@@ -120,6 +122,31 @@ function fail(e: unknown) {
  * envelope. Answer/create/pending tools go through this so tests hit the same
  * path as the registered tools.
  */
+/**
+ * `reqport_pending_approve` is approve only. It must not say this tool sends.
+ * The shared ARM brief describes the client forward used by respond tools and
+ * by `qp pending approve`, so it is not appended here.
+ */
+export const PENDING_APPROVE_TOOL_DESCRIPTION =
+  "Ask the server to release a held response via POST /v1/responses/pending/{id}/approve (scope responses:write). " +
+  "This tool never sends. It never posts the formal respond and never sends X-Reqport-Arm-Release-Id. " +
+  "On a structured release it returns the release id redacted as elsewhere (armrel_…), the release window, and the next step: call reqport_pending_send with confirm true and the echoed requestId. " +
+  "Free-text and unstructured authority types are not release-id gated and do not enter the send path. " +
+  "A ruleset HOLD or decline, or HTTP 403 ARM_STRUCTURED_NOT_ENABLED, is returned unchanged — never turned into a local release. " +
+  "A replaced row is HTTP 409 ARM_RELEASE_HELD_REPLACED. An already-decided row is HTTP 409 ARM_RELEASE_HELD_ALREADY_DECIDED. Those bodies are not described as sealed and sent.";
+
+/**
+ * `reqport_pending_send` is the irreversible one-shot formal respond.
+ * The description must say the send is irreversible and the id can be used only once.
+ */
+export const PENDING_SEND_TOOL_DESCRIPTION =
+  "Send a released structured answer once via POST /v3/workflows/{requestId}/respond with header X-Reqport-Arm-Release-Id. " +
+  "The send is irreversible and the release id can be used only once. A second attempt is ARM_RELEASE_REPLAYED. This tool does not retry. " +
+  "Requires confirm: true, the requestId echoed by reqport_pending_approve, and responseType. Without confirm: true it refuses and makes no network call. " +
+  "Free-text and unstructured authority types (UNSTRUCTURED_AUTHORITY_REQUEST_V1, UNSTRUCTURED_REQUEST_V1, AUTHORITY_REQUEST_V1, information, including INFORMATION_FOLLOWUP and edge.information.v1) are refused and never reach this gate. " +
+  "The release id is taken from the approve held in this process, or from the releaseId argument when the caller already has it. The full id is sent only on the header. " +
+  "HTTP 409 ARM_RELEASE_REPLAYED means the id was already used. HTTP 403 ARM_RELEASE_EXPIRED means the window closed. Neither means the answer was sealed and sent.";
+
 export async function executeTool<T>(
   env: string | undefined,
   fn: (client: ReqportClient) => Promise<T>
@@ -648,13 +675,41 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
     "reqport_pending_approve",
     {
       title: "Approve a held response",
-      description:
-        "Ask the server to release a held response via POST /v1/responses/pending/{id}/approve (scope responses:write). Seal + send happen only when the server releases it. A ruleset HOLD or decline, or HTTP 403 ARM_STRUCTURED_NOT_ENABLED, is returned unchanged — never turned into a local release. Irreversible when the server releases. " +
-        ARM_SURFACE_BRIEF,
+      description: PENDING_APPROVE_TOOL_DESCRIPTION,
       inputSchema: { env: envSchema, id: z.string().describe("Pending response id.") },
     },
     async ({ env, id }) =>
-      executeTool(env ?? defaultEnv, (client) => client.approvePendingResponse(id))
+      executeTool(env ?? defaultEnv, (client) => performPendingApproveOnly(client, id))
+  );
+
+  server.registerTool(
+    "reqport_pending_send",
+    {
+      title: "Send a released response once",
+      description: PENDING_SEND_TOOL_DESCRIPTION,
+      inputSchema: {
+        env: envSchema,
+        confirm: z
+          .literal(true)
+          .describe("Must be true. The send is irreversible and the release id can be used only once."),
+        requestId: z.string().describe("Request id echoed by reqport_pending_approve."),
+        responseType: z
+          .string()
+          .describe(
+            "Response type from the approve result. Free-text and unstructured authority types are refused with no network call."
+          ),
+        releaseId: z
+          .string()
+          .optional()
+          .describe(
+            "Full release id, only when this process does not already hold one for requestId. Sent only as X-Reqport-Arm-Release-Id."
+          ),
+      },
+    },
+    async ({ env, confirm, requestId, responseType, releaseId }) =>
+      executeTool(env ?? defaultEnv, (client) =>
+        performPendingSend(client, { confirm, requestId, responseType, releaseId })
+      )
   );
 
   server.registerTool(

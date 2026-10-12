@@ -1,10 +1,15 @@
 /**
- * Shared responder logic used by BOTH the CLI commands and the MCP tools, so
- * the two surfaces behave identically. No console output here — callers render.
+ * Shared responder logic used by the CLI commands and the MCP tools.
+ * No console output here — callers render.
+ *
+ * `qp pending approve` still approves and, for a structured release, posts the
+ * v3 formal respond in the same command. The MCP tools are split:
+ * `reqport_pending_approve` only approves, and `reqport_pending_send` posts
+ * the formal respond after an explicit confirm.
  */
 
 import { readFile } from "node:fs/promises";
-import { displayReleaseId, isDirectFreeTextWorkflow, releasedArmReleaseId } from "./armSurface.js";
+import { displayReleaseId, formatReleaseWindow, isDirectFreeTextWorkflow, releasedArmReleaseId } from "./armSurface.js";
 import { ReqportApiError, ReqportClient } from "./client.js";
 import {
   FIR_ABOUT_PARTIES,
@@ -379,6 +384,146 @@ export async function performPendingApprove(
   }
   const formal = await forwardArmRelease(client, requestId, result);
   return formal ? { ...result, formal } : result;
+}
+
+/**
+ * Structured release held in this process after `reqport_pending_approve`, so
+ * `reqport_pending_send` can place the id on `X-Reqport-Arm-Release-Id`
+ * without printing it. Not written for free-text / UAR types, and not used by
+ * the CLI. Lost when the process exits.
+ */
+const heldArmReleases = new Map<string, PendingActionResult>();
+
+/** Drop in-process release holds. Tests use this so cases do not share a hold. */
+export function clearHeldArmReleases(): void {
+  heldArmReleases.clear();
+}
+
+export type PendingApproveGuidance = PendingActionResult & {
+  /** Server expiry window, when the approve body included one. Display only. */
+  releaseWindow?: string;
+  /** What to do next. Never includes the full release id. */
+  nextStep: string;
+};
+
+function withReleaseGuidance(result: PendingActionResult, nextStep: string): PendingApproveGuidance {
+  const releaseWindow = formatReleaseWindow(result);
+  return releaseWindow ? { ...result, releaseWindow, nextStep } : { ...result, nextStep };
+}
+
+/**
+ * MCP approve. Posts `POST /v1/responses/pending/{id}/approve` and never the
+ * v3 formal respond. A structured release is remembered for
+ * `reqport_pending_send`. Free-text / UAR types are not remembered and are
+ * not steered onto that tool.
+ */
+export async function performPendingApproveOnly(
+  client: ReqportClient,
+  pendingId: string
+): Promise<PendingApproveGuidance> {
+  const result = await client.approvePendingResponse(pendingId);
+  const responseType = typeof result.responseType === "string" ? result.responseType : undefined;
+  const requestId = typeof result.requestId === "string" ? result.requestId.trim() : "";
+  if (isDirectFreeTextWorkflow(responseType)) {
+    if (requestId) heldArmReleases.delete(requestId);
+    return withReleaseGuidance(
+      result,
+      `Response type ${responseType} is free-text or an unstructured authority request. It is not release-id gated. Do not call reqport_pending_send.`
+    );
+  }
+  const releaseId = releasedArmReleaseId(result);
+  if (!releaseId) {
+    return withReleaseGuidance(
+      result,
+      "The server did not release a release id, so there is nothing to send. Do not call reqport_pending_send."
+    );
+  }
+  if (!requestId) {
+    return withReleaseGuidance(
+      result,
+      `Server released pending response ${pendingId} but the approve body had no requestId (release ${displayReleaseId(releaseId)}). The formal respond was not sent.`
+    );
+  }
+  heldArmReleases.set(requestId, { ...result, releaseId, requestId });
+  return withReleaseGuidance(
+    result,
+    `Call reqport_pending_send with confirm true and requestId ${requestId}. The send is irreversible and the release id can be used only once. This process holds the release id for that request; it is not repeated here.`
+  );
+}
+
+export type PendingSendInput = {
+  /** Must be boolean true. Any other value refuses before a network call. */
+  confirm?: unknown;
+  /** Request id echoed by reqport_pending_approve. */
+  requestId?: string;
+  /**
+   * Response type from the approve result. Required so omitting it cannot
+   * skip the free-text / UAR check.
+   */
+  responseType?: string;
+  /**
+   * Full release id, only when this process does not already hold one for
+   * requestId. Sent solely as `X-Reqport-Arm-Release-Id`.
+   */
+  releaseId?: string;
+};
+
+function refusePendingSend(message: string): Error {
+  return new Error(`${message} The formal respond was not sent.`);
+}
+
+/**
+ * MCP send. One irreversible `POST /v3/workflows/{requestId}/respond` with
+ * `X-Reqport-Arm-Release-Id`. Refuses, with no network call, unless confirm
+ * is true, the request id is present, and the response type is structured.
+ * A release id is used only once; this function does not retry.
+ */
+export async function performPendingSend(
+  client: ReqportClient,
+  input: PendingSendInput
+): Promise<FormalRespondResult> {
+  if (input.confirm !== true) {
+    throw refusePendingSend("reqport_pending_send requires confirm: true.");
+  }
+  const requestId = typeof input.requestId === "string" ? input.requestId.trim() : "";
+  if (!requestId) {
+    throw refusePendingSend("reqport_pending_send requires the requestId echoed by reqport_pending_approve.");
+  }
+  const responseType = typeof input.responseType === "string" ? input.responseType.trim() : "";
+  if (!responseType || isDirectFreeTextWorkflow(responseType)) {
+    throw refusePendingSend(
+      responseType
+        ? `Response type ${responseType} is not release-id gated. Do not call reqport_pending_send.`
+        : "reqport_pending_send requires responseType so a free-text or UAR answer cannot skip the gate check."
+    );
+  }
+  const held = heldArmReleases.get(requestId);
+  const heldType = typeof held?.responseType === "string" ? held.responseType : undefined;
+  if (isDirectFreeTextWorkflow(heldType)) {
+    heldArmReleases.delete(requestId);
+    throw refusePendingSend(
+      `Response type ${heldType} is not release-id gated. Do not call reqport_pending_send.`
+    );
+  }
+  const explicit = typeof input.releaseId === "string" ? input.releaseId.trim() : "";
+  const releaseId = explicit || (held ? releasedArmReleaseId(held) ?? "" : "");
+  if (!releaseId) {
+    throw refusePendingSend(
+      "No release id is held for this requestId. Approve the held response in this process first, or pass the release id."
+    );
+  }
+  const gate = {
+    ...(held ?? {}),
+    disposition: "RELEASED",
+    releaseId,
+    requestId,
+    responseType,
+  };
+  const formal = await forwardArmRelease(client, requestId, gate);
+  if (!formal) {
+    throw refusePendingSend("The release was not in a released state.");
+  }
+  return formal;
 }
 
 /**
