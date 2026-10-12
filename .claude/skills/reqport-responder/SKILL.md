@@ -361,9 +361,14 @@ It never sends. On a structured release the result includes the release id
 redacted as elsewhere, the release window, and the next step.
 `reqport_pending_send` posts the irreversible v3 formal respond with
 `X-Reqport-Arm-Release-Id`. It requires `confirm: true` and the request id
-echoed by approve. The send is irreversible and the release id can be used
-only once. Free-text and UAR types are not release-id gated and that tool
-refuses them. `qp pending approve` stays the combined approve-then-send command.
+echoed by approve. The header uses only the release id held for that request.
+If none is held, or a passed release id differs from the held one, the tool
+refuses and makes no network call. The hold is deleted before the POST, so a
+retry cannot replay it. The send is irreversible and the release id can be
+used only once. Free-text and UAR types are not release-id gated and that tool
+refuses them. `qp pending approve` stays the combined approve-then-send
+command and uses the same held-id rule: it stores the release for that request,
+then deletes it before the formal POST.
 
 ## Definition of done
 

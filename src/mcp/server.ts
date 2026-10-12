@@ -144,7 +144,7 @@ export const PENDING_SEND_TOOL_DESCRIPTION =
   "The send is irreversible and the release id can be used only once. A second attempt is ARM_RELEASE_REPLAYED. This tool does not retry. " +
   "Requires confirm: true, the requestId echoed by reqport_pending_approve, and responseType. Without confirm: true it refuses and makes no network call. " +
   "Free-text and unstructured authority types (UNSTRUCTURED_AUTHORITY_REQUEST_V1, UNSTRUCTURED_REQUEST_V1, AUTHORITY_REQUEST_V1, information, including INFORMATION_FOLLOWUP and edge.information.v1) are refused and never reach this gate. " +
-  "The release id is taken from the approve held in this process, or from the releaseId argument when the caller already has it. The full id is sent only on the header. " +
+  "The header uses only the release id held in this process for that requestId. The hold is deleted before the POST, so a retry cannot replay it. A caller-passed releaseId must match the held id; if none is held, or the passed id differs, the tool refuses and makes no network call. The full id is sent only on the header. " +
   "HTTP 409 ARM_RELEASE_REPLAYED means the id was already used. HTTP 403 ARM_RELEASE_EXPIRED means the window closed. Neither means the answer was sealed and sent.";
 
 export async function executeTool<T>(
@@ -702,7 +702,7 @@ export async function runMcpServer(defaultEnv?: string): Promise<void> {
           .string()
           .optional()
           .describe(
-            "Full release id, only when this process does not already hold one for requestId. Sent only as X-Reqport-Arm-Release-Id."
+            "Optional check. Must match the release id held for requestId. A different id is refused. The header always uses the held id."
           ),
       },
     },

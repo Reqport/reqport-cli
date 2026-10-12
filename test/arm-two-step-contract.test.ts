@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ReqportApiError, ReqportClient } from "../src/client.js";
 import {
   clearHeldArmReleases,
+  hasHeldArmRelease,
   performPendingApprove,
   performPendingApproveOnly,
   performPendingSend,
@@ -580,6 +581,17 @@ describe("MCP approve and send are separate", () => {
       expect(v3).toHaveLength(1);
       expect(v3[0].releaseId).toBe(releaseId);
       assertReleaseIdHidden(explained, releaseId);
+      expect(hasHeldArmRelease(requestId)).toBe(false);
+      const afterError = calls.length;
+      await expect(
+        performPendingSend(client, {
+          confirm: true,
+          requestId,
+          responseType: "BUSINESS_RELATIONSHIP_CHECK_V1",
+          releaseId,
+        })
+      ).rejects.toThrow(/No release id is held for request/);
+      expect(calls).toHaveLength(afterError);
 
       vi.unstubAllGlobals();
       clearHeldArmReleases();
@@ -690,5 +702,221 @@ describe("MCP approve and send are separate", () => {
     expect(printed.releaseId).toBe("armrel_…");
     expect(printed.formal?.status).toBe("RESPONDED");
     expect(calls.find((c) => c.url.includes("/v3/"))?.releaseId).toBe(releaseId);
+  });
+
+  it("refuses send when no release id is held for that request", async () => {
+    const releaseId = syntheticReleaseId("no-hold");
+    const calls = mockVanta(() => ({ status: 500, json: { code: "SHOULD_NOT_CALL" } }));
+    const client = testClient();
+    await expect(
+      performPendingSend(client, {
+        confirm: true,
+        requestId: "req-no-hold",
+        responseType: "BUSINESS_RELATIONSHIP_CHECK_V1",
+        releaseId,
+      })
+    ).rejects.toThrow(/No release id is held for request req-no-hold/);
+    expect(calls).toHaveLength(0);
+    expect(hasHeldArmRelease("req-no-hold")).toBe(false);
+
+    vi.unstubAllGlobals();
+    const otherId = syntheticReleaseId("other-hold");
+    const otherCalls = mockVanta(({ url, method }) => {
+      if (method === "POST" && url.includes("/approve")) {
+        return {
+          status: 200,
+          json: {
+            ...ARM_RELEASE_ID_GATE.released,
+            releaseId: otherId,
+            requestId: "req-other",
+            responseType: "BUSINESS_RELATIONSHIP_CHECK_V1",
+          },
+        };
+      }
+      return { status: 500, json: { code: "SHOULD_NOT_CALL", url, method } };
+    });
+    await performPendingApproveOnly(testClient(), "pend-other");
+    expect(hasHeldArmRelease("req-other")).toBe(true);
+    await expect(
+      performPendingSend(testClient(), {
+        confirm: true,
+        requestId: "req-no-hold",
+        responseType: "BUSINESS_RELATIONSHIP_CHECK_V1",
+        releaseId: otherId,
+      })
+    ).rejects.toThrow(/No release id is held for request req-no-hold/);
+    expect(otherCalls.some((c) => c.url.includes("/v3/"))).toBe(false);
+    expect(hasHeldArmRelease("req-other")).toBe(true);
+    expect(hasHeldArmRelease("req-no-hold")).toBe(false);
+  });
+
+  it("refuses a caller release id that differs from the one held for the request", async () => {
+    const heldId = syntheticReleaseId("held-match");
+    const otherId = syntheticReleaseId("held-mismatch");
+    const requestId = "req-mismatch";
+    const calls = mockVanta(({ url, method }) => {
+      if (method === "POST" && url.includes("/approve")) {
+        return {
+          status: 200,
+          json: {
+            ...ARM_RELEASE_ID_GATE.released,
+            releaseId: heldId,
+            requestId,
+            responseType: "BUSINESS_RELATIONSHIP_CHECK_V1",
+          },
+        };
+      }
+      return { status: 500, json: { code: "SHOULD_NOT_CALL", url, method } };
+    });
+    const client = testClient();
+    await performPendingApproveOnly(client, "pend-mismatch");
+    expect(hasHeldArmRelease(requestId)).toBe(true);
+    let thrown: unknown;
+    try {
+      await performPendingSend(client, {
+        confirm: true,
+        requestId,
+        responseType: "BUSINESS_RELATIONSHIP_CHECK_V1",
+        releaseId: otherId,
+      });
+    } catch (e) {
+      thrown = e;
+    }
+    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    expect(message).toMatch(/does not match the one held for request req-mismatch/);
+    expect(message).toMatch(/formal respond was not sent/i);
+    assertReleaseIdHidden(message, heldId);
+    assertReleaseIdHidden(message, otherId);
+    expect(calls.some((c) => c.url.includes("/v3/"))).toBe(false);
+    expect(calls).toHaveLength(1);
+    expect(hasHeldArmRelease(requestId)).toBe(true);
+  });
+
+  it("deletes the held release id before the formal POST on MCP send and qp pending approve", async () => {
+    const releaseId = syntheticReleaseId("drop-mcp");
+    const requestId = "req-drop-mcp";
+    let heldDuringPost: boolean | undefined;
+    const calls = mockVanta(({ url, method }) => {
+      if (method === "POST" && url.includes("/approve")) {
+        return {
+          status: 200,
+          json: {
+            ...ARM_RELEASE_ID_GATE.released,
+            releaseId,
+            requestId,
+            responseType: "BUSINESS_RELATIONSHIP_CHECK_V1",
+          },
+        };
+      }
+      if (method === "POST" && url.includes("/v3/")) {
+        heldDuringPost = hasHeldArmRelease(requestId);
+        return { status: 200, json: { status: "RESPONDED" } };
+      }
+      return { status: 500, json: { code: "UNEXPECTED_TEST_ROUTE", url, method } };
+    });
+    const client = testClient();
+    await performPendingApproveOnly(client, "pend-drop-mcp");
+    expect(hasHeldArmRelease(requestId)).toBe(true);
+    await performPendingSend(client, {
+      confirm: true,
+      requestId,
+      responseType: "BUSINESS_RELATIONSHIP_CHECK_V1",
+    });
+    expect(heldDuringPost).toBe(false);
+    expect(hasHeldArmRelease(requestId)).toBe(false);
+    expect(calls.filter((c) => c.url.includes("/v3/"))).toHaveLength(1);
+    expect(calls.find((c) => c.url.includes("/v3/"))?.releaseId).toBe(releaseId);
+    const beforeRetry = calls.length;
+    await expect(
+      performPendingSend(client, {
+        confirm: true,
+        requestId,
+        responseType: "BUSINESS_RELATIONSHIP_CHECK_V1",
+        releaseId,
+      })
+    ).rejects.toThrow(/No release id is held for request/);
+    expect(calls).toHaveLength(beforeRetry);
+
+    vi.unstubAllGlobals();
+    clearHeldArmReleases();
+    const cliReleaseId = syntheticReleaseId("drop-cli");
+    const cliRequestId = "req-drop-cli";
+    let heldDuringCliPost: boolean | undefined;
+    const cliCalls = mockVanta(({ url, method }) => {
+      if (method === "POST" && url.endsWith("/v1/responses/pending/pend-drop-cli/approve")) {
+        return {
+          status: 200,
+          json: {
+            ...ARM_RELEASE_ID_GATE.released,
+            releaseId: cliReleaseId,
+            requestId: cliRequestId,
+            responseType: "BUSINESS_RELATIONSHIP_CHECK_V1",
+          },
+        };
+      }
+      if (method === "POST" && url.includes("/v3/")) {
+        heldDuringCliPost = hasHeldArmRelease(cliRequestId);
+        return { status: 200, json: { status: "RESPONDED" } };
+      }
+      return { status: 500, json: { code: "UNEXPECTED_TEST_ROUTE", url, method } };
+    });
+    const formal = await performPendingApprove(testClient(), "pend-drop-cli");
+    expect(formal.formal?.status).toBe("RESPONDED");
+    expect(heldDuringCliPost).toBe(false);
+    expect(hasHeldArmRelease(cliRequestId)).toBe(false);
+    const cliV3 = cliCalls.filter((c) => c.url.includes("/v3/"));
+    expect(cliV3).toHaveLength(1);
+    expect(cliV3[0].releaseId).toBe(cliReleaseId);
+    const beforeCliRetry = cliCalls.length;
+    await expect(
+      performPendingSend(testClient(), {
+        confirm: true,
+        requestId: cliRequestId,
+        responseType: "BUSINESS_RELATIONSHIP_CHECK_V1",
+        releaseId: cliReleaseId,
+      })
+    ).rejects.toThrow(/No release id is held for request/);
+    expect(cliCalls).toHaveLength(beforeCliRetry);
+  });
+
+  it("sends once with the release id held for that request", async () => {
+    const releaseId = syntheticReleaseId("happy-held");
+    const requestId = "req-happy-held";
+    let heldDuringPost: boolean | undefined;
+    const calls = mockVanta(({ url, method }) => {
+      if (method === "POST" && url.endsWith("/v1/responses/pending/pend-happy/approve")) {
+        return {
+          status: 200,
+          json: {
+            ...ARM_RELEASE_ID_GATE.released,
+            id: "pend-happy",
+            releaseId,
+            requestId,
+            responseType: "BUSINESS_RELATIONSHIP_CHECK_V1",
+          },
+        };
+      }
+      if (method === "POST" && url.endsWith(`/v3/workflows/${requestId}/respond`)) {
+        heldDuringPost = hasHeldArmRelease(requestId);
+        return { status: 200, json: { status: "RESPONDED" } };
+      }
+      return { status: 500, json: { code: "UNEXPECTED_TEST_ROUTE", url, method } };
+    });
+    const client = testClient();
+    await performPendingApproveOnly(client, "pend-happy");
+    expect(hasHeldArmRelease(requestId)).toBe(true);
+    const sent = await performPendingSend(client, {
+      confirm: true,
+      requestId,
+      responseType: "BUSINESS_RELATIONSHIP_CHECK_V1",
+      releaseId,
+    });
+    expect(sent.status).toBe("RESPONDED");
+    expect(heldDuringPost).toBe(false);
+    const v3 = calls.filter((c) => c.url.includes("/v3/"));
+    expect(v3).toHaveLength(1);
+    expect(v3[0].releaseId).toBe(releaseId);
+    expect(v3[0].body).toMatchObject({ shape: SHAPE });
+    expect(hasHeldArmRelease(requestId)).toBe(false);
   });
 });
