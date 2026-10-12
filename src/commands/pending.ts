@@ -4,8 +4,9 @@
  * submitted answer is parked until an approver releases it; the seal + send then
  * happens server-side.
  *
- *   qp pending list                       (this org's held responses)
- *   qp pending approve <id>               (release: seal + send)
+ *   qp pending list                       (this org's PENDING and REPLACED rows)
+ *   qp pending show <id>                  (one row, any status; no release id)
+ *   qp pending approve <id>               (release: seal + send, then v3 when a release id is returned)
  *   qp pending reject <id> [--reason …]
  *   qp pending withdraw <id>              (submitter withdraws their own)
  *
@@ -16,10 +17,10 @@
 import { ReqportClient } from "../client.js";
 import { type ReqportEnv } from "../env.js";
 import { requireResponderCredential } from "../auth/session.js";
-import { displayReleaseId, releasedArmReleaseId, serverDecision } from "../armSurface.js";
-import { forwardArmRelease } from "../core.js";
+import { formatReleaseWindow, serverDecision } from "../armSurface.js";
+import { performPendingApprove } from "../core.js";
 import { confirm, line, printJson, table } from "../ui.js";
-import type { FormalRespondResult, PendingActionResult, PendingResponse } from "../types.js";
+import type { PendingActionResult, PendingResponse } from "../types.js";
 
 async function clientFor(env: ReqportEnv): Promise<ReqportClient> {
   return new ReqportClient({ env, credential: await requireResponderCredential() });
@@ -52,18 +53,63 @@ export async function runPendingList(
     p.id,
     p.requestId ?? "",
     p.responseType ?? "",
+    p.status ?? "",
     p.auth002Status ?? "",
-    p.submitter ?? "",
+    pendingSubmitter(p),
+    typeof p.label === "string" ? p.label : "",
     p.createdAt ?? "",
   ]);
   line(
     table(
-      ["PENDING ID", "REQUEST ID", "RESPONSE TYPE", "AUTH.002", "SUBMITTER", "CREATED"],
+      ["PENDING ID", "REQUEST ID", "RESPONSE TYPE", "STATUS", "AUTH.002", "SUBMITTER", "LABEL", "CREATED"],
       rows
     )
   );
   line("");
-  line(`${items.length} held response(s). Release one:  qp pending approve <PENDING ID>`);
+  line(`${items.length} held response(s). Inspect one:  qp pending show <PENDING ID>`);
+  line("Release one:  qp pending approve <PENDING ID>");
+  return 0;
+}
+
+/** OpenAPI field is `submittedBy`. Older bodies used `submitter`. */
+function pendingSubmitter(p: PendingResponse): string {
+  if (typeof p.submittedBy === "string" && p.submittedBy.trim()) return p.submittedBy.trim();
+  if (typeof p.submitter === "string" && p.submitter.trim()) return p.submitter.trim();
+  return "";
+}
+
+/**
+ * GET /v1/responses/pending/{id}. The row has no release id. Decided rows
+ * stay readable after a 409. `--json` is the server body with release ids redacted.
+ */
+export async function runPendingShow(
+  env: ReqportEnv,
+  id: string,
+  opts: { json?: boolean }
+): Promise<number> {
+  const client = await clientFor(env);
+  const row = await client.getPendingResponse(id);
+  if (opts.json) {
+    printJson(row);
+    return 0;
+  }
+  line(`Held response ${row.id ?? id}`);
+  if (row.requestId) line(`  request:    ${row.requestId}`);
+  if (row.responseType) line(`  type:       ${row.responseType}`);
+  if (row.status) line(`  status:     ${row.status}`);
+  if (row.auth002Status) line(`  auth.002:   ${row.auth002Status}`);
+  const submitter = pendingSubmitter(row);
+  if (submitter) line(`  submitter:  ${submitter}`);
+  if (typeof row.label === "string" && row.label) line(`  label:      ${row.label}`);
+  if (typeof row.closedBy === "string" && row.closedBy) line(`  closed by:  ${row.closedBy}`);
+  const reason =
+    typeof row.decisionReason === "string" && row.decisionReason
+      ? row.decisionReason
+      : typeof row.reason === "string"
+        ? row.reason
+        : "";
+  if (reason) line(`  reason:     ${reason}`);
+  if (row.createdAt) line(`  created:    ${row.createdAt}`);
   return 0;
 }
 
@@ -87,11 +133,11 @@ export async function runPendingApprove(
     return 1;
   }
   const client = await clientFor(env);
-  const res = await client.approvePendingResponse(id);
-  const formal = await forwardHumanRelease(client, id, res);
+  const res = await performPendingApprove(client, id);
+  const formal = res.formal;
 
   if (opts.json) {
-    printJson(formal ? { ...res, formal } : res);
+    printJson(res);
     return 0;
   }
   // Formal delivery status stands alone. Do not mix it with the gate's
@@ -109,29 +155,11 @@ export async function runPendingApprove(
         }
       : res
   );
-  return 0;
-}
-
-/**
- * Human RELEASED approve: capture releaseId and post the v3 formal respond
- * with the header. No releaseId means the server finished inline (no header).
- * A releaseId without a request id cannot be forwarded, and is not described
- * as sealed and sent.
- */
-async function forwardHumanRelease(
-  client: ReqportClient,
-  pendingId: string,
-  res: PendingActionResult
-): Promise<FormalRespondResult | undefined> {
-  const releaseId = releasedArmReleaseId(res);
-  if (!releaseId) return undefined;
-  const requestId = typeof res.requestId === "string" ? res.requestId.trim() : "";
-  if (!requestId) {
-    throw new Error(
-      `Server released pending response ${pendingId} but the approve body had no requestId (release ${displayReleaseId(releaseId)}). The formal respond was not sent.`
-    );
+  if (formal) {
+    const window = formatReleaseWindow(res);
+    if (window) line(`  expires:    ${window}`);
   }
-  return forwardArmRelease(client, requestId, res);
+  return 0;
 }
 
 export async function runPendingReject(
@@ -188,7 +216,8 @@ function renderPendingDecision(
   }
   if (decision === "declined") {
     line(`Server declined response ${shownId}${res.status ? ` (${res.status})` : ""}.`);
-    if (typeof res.reason === "string" && res.reason) line(`  reason: ${res.reason}`);
+    const reason = res.reason || res.decisionReason;
+    if (typeof reason === "string" && reason) line(`  reason: ${reason}`);
     return;
   }
   if (action === "approve" && decision === "released") {

@@ -178,7 +178,7 @@ describe("release id is forwarded only when the server released", () => {
     const releaseId = syntheticReleaseId("auto");
     const calls = mockVanta(({ url, method }) => {
       if (method === "GET" && url.endsWith(`/v1/workflows/${id}`)) {
-        return { status: 200, json: workflow(id, "INFORMATION_FOLLOWUP") };
+        return { status: 200, json: workflow(id, "STRUCTURED_OTHER_V1") };
       }
       if (method === "POST" && url.endsWith(`/v1/requests/${id}/response`)) {
         return {
@@ -212,6 +212,7 @@ describe("release id is forwarded only when the server released", () => {
     expect(formal?.idempotencyKey).toBeUndefined();
     expect(io.stdout()).toContain("The server released this answer.");
     expect(io.stdout()).toMatch(/release id:\s+armrel_…/);
+    expect(io.stdout()).toContain("2026-10-05T21:43:00Z (ttl 120s)");
     assertReleaseIdHidden(io.stdout(), releaseId);
     assertNoReleaseClaim(io.stdout());
     assertNoKey(io.stdout());
@@ -222,7 +223,7 @@ describe("release id is forwarded only when the server released", () => {
     const releaseId = syntheticReleaseId("mcp");
     const autoCalls = mockVanta(({ url, method }) => {
       if (method === "GET" && url.endsWith(`/v1/workflows/${id}`)) {
-        return { status: 200, json: workflow(id, "INFORMATION_FOLLOWUP") };
+        return { status: 200, json: workflow(id, "STRUCTURED_OTHER_V1") };
       }
       if (method === "POST" && url.endsWith(`/v1/requests/${id}/response`)) {
         return { status: 200, json: { ...ARM_RELEASE_ID_GATE.autoRelease, releaseId } };
@@ -250,7 +251,7 @@ describe("release id is forwarded only when the server released", () => {
     const holdId = "req-mcp-hold";
     const holdCalls = mockVanta(({ url, method }) => {
       if (method === "GET" && url.endsWith(`/v1/workflows/${holdId}`)) {
-        return { status: 200, json: workflow(holdId, "INFORMATION_FOLLOWUP") };
+        return { status: 200, json: workflow(holdId, "STRUCTURED_OTHER_V1") };
       }
       if (method === "POST" && url.endsWith(`/v1/requests/${holdId}/response`)) {
         return { status: 202, json: ARM_RELEASE_ID_GATE.hold };
@@ -276,7 +277,7 @@ describe("release id is forwarded only when the server released", () => {
     const holdId = "req-hold";
     const holdCalls = mockVanta(({ url, method }) => {
       if (method === "GET" && url.endsWith(`/v1/workflows/${holdId}`)) {
-        return { status: 200, json: workflow(holdId, "INFORMATION_FOLLOWUP") };
+        return { status: 200, json: workflow(holdId, "STRUCTURED_OTHER_V1") };
       }
       if (method === "POST" && url.endsWith(`/v1/requests/${holdId}/response`)) {
         return { status: 202, json: ARM_RELEASE_ID_GATE.hold };
@@ -296,7 +297,7 @@ describe("release id is forwarded only when the server released", () => {
     const declineId = "req-decline";
     const declineCalls = mockVanta(({ url, method }) => {
       if (method === "GET" && url.endsWith(`/v1/workflows/${declineId}`)) {
-        return { status: 200, json: workflow(declineId, "INFORMATION_FOLLOWUP") };
+        return { status: 200, json: workflow(declineId, "STRUCTURED_OTHER_V1") };
       }
       if (method === "POST" && url.endsWith(`/v1/requests/${declineId}/response`)) {
         return { status: 200, json: ARM_RELEASE_ID_GATE.decline };
@@ -318,7 +319,7 @@ describe("release id is forwarded only when the server released", () => {
     const id = "req-case";
     const calls = mockVanta(({ url, method }) => {
       if (method === "GET" && url.endsWith(`/v1/workflows/${id}`)) {
-        return { status: 200, json: workflow(id, "INFORMATION_FOLLOWUP") };
+        return { status: 200, json: workflow(id, "STRUCTURED_OTHER_V1") };
       }
       if (method === "POST" && url.endsWith(`/v1/requests/${id}/response`)) {
         return { status: 200, json: { disposition: "auto_release", releaseId: "rel-lower", shape: SHAPE } };
@@ -340,7 +341,7 @@ describe("release id is forwarded only when the server released", () => {
     const gate = autoRelease("payload");
     const calls = mockVanta(({ url, method }) => {
       if (method === "GET" && url.endsWith(`/v1/workflows/${id}`)) {
-        return { status: 200, json: workflow(id, "INFORMATION_FOLLOWUP") };
+        return { status: 200, json: workflow(id, "STRUCTURED_OTHER_V1") };
       }
       if (method === "POST" && url.endsWith(`/v1/requests/${id}/response`)) {
         return { status: 200, json: gate };
@@ -368,7 +369,7 @@ describe("ARM_RELEASE_* refusals", () => {
     const id = "req-gate-err";
     const calls = mockVanta(({ url, method }) => {
       if (method === "GET" && url.endsWith(`/v1/workflows/${id}`)) {
-        return { status: 200, json: workflow(id, "INFORMATION_FOLLOWUP") };
+        return { status: 200, json: workflow(id, "STRUCTURED_OTHER_V1") };
       }
       if (method === "POST" && url.endsWith(`/v1/requests/${id}/response`)) {
         return { status: RELEASE_SHAPE.http, json: RELEASE_SHAPE.body };
@@ -414,7 +415,7 @@ describe("ARM_RELEASE_* refusals", () => {
     const id = "req-formal-err";
     mockVanta(({ url, method }) => {
       if (method === "GET" && url.endsWith(`/v1/workflows/${id}`)) {
-        return { status: 200, json: workflow(id, "INFORMATION_FOLLOWUP") };
+        return { status: 200, json: workflow(id, "STRUCTURED_OTHER_V1") };
       }
       if (method === "POST" && url.endsWith(`/v1/requests/${id}/response`)) {
         return { status: 200, json: autoRelease("formal-required") };
@@ -484,6 +485,7 @@ describe("human RELEASED approve", () => {
     expect(calls.find((c) => c.url.includes("/approve"))?.releaseId).toBeUndefined();
     expect(io.stdout()).toMatch(/sealed and sent server-side/);
     expect(io.stdout()).toContain("RESPONDED");
+    expect(io.stdout()).toContain("2026-10-05T21:45:00Z (ttl 120s)");
     assertReleaseIdHidden(io.stdout(), releaseId);
     assertNoKey(io.stdout());
   });
@@ -570,6 +572,7 @@ describe("human RELEASED approve", () => {
     expect(explained).toContain(RELEASE_REPLAYED.body.message);
     expect(explained).toContain("already-used");
     expect(explained).toContain("not sealed or sent");
+    expect(explained).toContain("A release id is used once.");
     expect(explained).toContain("Check the request status before trying again.");
     expect(explained).not.toContain("Already submitted");
     expect(apiErrorEnvelope(err).body).toEqual(RELEASE_REPLAYED.body);
@@ -671,7 +674,7 @@ describe("contract codes, KYC, and no retry", () => {
         throw new Error(`socket hang up url=https://vanta.test/v3/workflows/${id}/respond?releaseId=${leaked ?? ""}`);
       }
       if (url.endsWith(`/v1/workflows/${id}`)) {
-        return new Response(JSON.stringify(workflow(id, "INFORMATION_FOLLOWUP")), {
+        return new Response(JSON.stringify(workflow(id, "STRUCTURED_OTHER_V1")), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
@@ -704,7 +707,7 @@ describe("contract codes, KYC, and no retry", () => {
     const releaseId = syntheticReleaseId("json");
     const calls = mockVanta(({ url, method }) => {
       if (method === "GET" && url.endsWith(`/v1/workflows/${id}`)) {
-        return { status: 200, json: workflow(id, "INFORMATION_FOLLOWUP") };
+        return { status: 200, json: workflow(id, "STRUCTURED_OTHER_V1") };
       }
       if (method === "POST" && url.endsWith(`/v1/requests/${id}/response`)) {
         return { status: 200, json: { ...ARM_RELEASE_ID_GATE.autoRelease, releaseId } };

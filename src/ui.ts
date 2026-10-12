@@ -95,7 +95,9 @@ export function explainError(e: unknown): string {
       if (isArmReleaseErrorCode(e.code)) {
         const message = contractMessage(envelope.body) ?? e.code;
         const hint =
-          e.code === "ARM_RELEASE_REPLAYED" ? "Check the request status before trying again.\n" : "";
+          e.code === "ARM_RELEASE_REPLAYED"
+            ? "A release id is used once. Check the request status before trying again.\n"
+            : "";
         return `${message}\n${hint}HTTP ${envelope.httpStatus}\n${json}`;
       }
       return `HTTP ${envelope.httpStatus}\n${json}`;
