@@ -1,10 +1,11 @@
 /**
  * `qp login` / `qp logout` / `qp whoami` — portal-pairing auth.
  *
- * `qp login` opens the Reqport console's CLI-auth page (which reuses the portal's
- * existing Signicat session — no new OAuth client, no device flow, no localhost
- * callback), the human approves, and the portal mints + relays an rqk_live_ key
- * back to the CLI. The key is stored as the active credential (and as a per-env
+ * `qp login` asks the portal to start a server-issued device-code pairing
+ * (`/api/developer/cli-auth/begin`), prints the short user code, and opens the
+ * console's CLI-auth page. The human signs in, confirms the code, and the portal
+ * mints + relays an rqk_live_ key back to the CLI (see auth/pairing.ts). The key is
+ * stored as the active credential (and as a per-env
  * copy). The active-env switch + listing live in `qp use` / `qp env` (use.ts).
  */
 

@@ -49,11 +49,15 @@ get one onto a machine:
 - **Set `REQPORT_API_KEY`** — for automation (agents / CI). Read at runtime only;
   never a flag, never logged. Needs scopes **`payloads:read`** + **`responses:write`**
   for the responder loop.
-- **`qp login`** (portal pairing) — for humans. A browser opens the Reqport
-  console's CLI-auth page (which reuses your existing console session), you match
-  a short confirmation code and approve, and the console mints a key and relays it
-  back to the terminal, where it's stored as the active credential. **No new OAuth
-  client, no device flow, no localhost callback, no password ever seen by the CLI.**
+- **`qp login`** (portal pairing) — for humans. The CLI asks the console for a
+  short one-time code (e.g. `ABCD-EFGH`) and prints it; a browser opens the
+  console's CLI-auth page, you sign in, confirm that the page shows the same
+  code, and approve. The console mints a key and relays it back to the terminal,
+  where it's stored as the active credential. **No new OAuth client, no localhost
+  callback, no password ever seen by the CLI.** The code is issued by the server,
+  never by a link, so a link someone sends you cannot choose the code you confirm.
+  Requires a portal that supports device-code pairing (portal #815); `qp` 0.9.0+
+  refuses to talk to older portals rather than fall back to the old flow.
 
 Precedence for `requests` / `respond`: `REQPORT_API_KEY` first, else the stored
 paired key. **Agents/CI should always use `REQPORT_API_KEY`.**
@@ -110,11 +114,11 @@ qp login --env sandbox                          # default portal https://reqport
 qp login --env sandbox --portal-url https://sandbox.reqport.com --name my-laptop
 ```
 
-The CLI prints a confirmation code, opens
-`{portalUrl}/{locale}/developer/cli-auth?state=…&challenge=…&env=…`, and polls
-`{portalUrl}/api/developer/cli-auth/poll` until the console relays the key (or you
-Ctrl+C). Override the portal with `--portal-url` / `QP_PORTAL_URL` (e.g. for
-sandbox or aurora); locale via `QP_LOCALE` (default `en`).
+The CLI prints `Confirm this code in your browser: ABCD-EFGH`, opens
+`{verification_uri}?user_code=ABCD-EFGH` (the URI comes from the portal), and polls
+`{portalUrl}/api/developer/cli-auth/poll` until the console relays the key, the
+code expires (5 minutes), or you Ctrl+C. Override the portal with `--portal-url` /
+`QP_PORTAL_URL` (e.g. for sandbox or aurora).
 
 ### Key management is in the console
 
@@ -449,23 +453,29 @@ must resubmit as a pre-sealed `--payload-id`; the gated submit returns
 
 The portal implements the server half; the CLI implements this half. For reference:
 
-1. **CLI** generates a secret `verifier` + random `state`, and
-   `challenge = base64url(SHA256(verifier))`. It prints a confirmation code (the
-   first 8 chars of `state`) and opens
-   `GET {portalUrl}/{locale}/developer/cli-auth?state={state}&challenge={challenge}&env={env}[&name={name}]`.
-2. The **human** (already signed in to the console) verifies the code matches and
-   approves. The portal mints an `rqk_live_` key bound to `state`.
-3. **CLI** polls `POST {portalUrl}/api/developer/cli-auth/poll` with
-   `{state, verifier}` every ~2.5s (5-min timeout, clean Ctrl+C):
-   - `202 {status:"pending"}` → keep polling
-   - `200 {status:"ready", apiKey, keyId, env, scopes, expiresAt}` → store & stop
-   - `403` (verifier mismatch) / `404` (no session) / `410` (expired) → abort with a clear message
-4. CLI stores `{value: apiKey, kind:"apikey", env, keyId, scopes, expiresAt}` as
-   the active credential.
+1. **CLI** generates a secret `verifier` and
+   `challenge = base64url(SHA256(verifier))`, then
+   `POST {portalUrl}/api/developer/cli-auth/begin` with `{challenge, env, name}`.
+   - `200 {device_code, user_code, verification_uri, expires_in, interval}`: the
+     server mints both codes. `device_code` is the CLI-only poll secret.
+   - `429`: back off and retry a few times; `503`: busy; `400`: invalid;
+     `404`: portal too old (hard error, no fallback to the legacy flow).
+2. **CLI** prints `user_code` and opens `{verification_uri}?user_code={user_code}`
+   (nothing else in the URL).
+3. The **human** (signed in to the console) checks the code and approves. The
+   portal mints an `rqk_live_` key bound to the pairing.
+4. **CLI** polls `POST {portalUrl}/api/developer/cli-auth/poll` with
+   `{device_code, verifier}` every `interval` seconds (gives up after `expires_in`):
+   - `202 {status:"pending"}`: keep polling; `429`: back off
+   - `200 {status:"ready", apiKey, keyId, env, envLabel, vantaBaseUrl, scopes, expiresAt}`: store & stop
+   - `410` (`expired` / `consumed` / `cli_update_required`), `403 bad_verifier`,
+     `404`: abort with a clear message
+5. CLI stores `{value: apiKey, kind:"apikey", env, keyId, scopes, expiresAt}` as
+   the active credential. `device_code`, `verifier` and the key are never logged.
 
-The portal authenticates the caller by requiring proof of `verifier` (whose
-SHA-256 it received as `challenge`), so the minted key is only handed to the
-client that started the pairing.
+The portal authenticates the poller by requiring both `device_code` and proof of
+`verifier` (whose SHA-256 it received as `challenge`), so the minted key is only
+handed to the client that started the pairing.
 
 ## MCP server
 
