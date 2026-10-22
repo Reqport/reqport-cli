@@ -3,7 +3,7 @@
  * @reqport/cli — the `qp` responder CLI + MCP server.
  *
  * Auth for automation: REQPORT_API_KEY (rqk_live_...) from the environment.
- * Auth for humans: `qp login` (Signicat, browser). Key is never a flag / logged.
+ * Auth for humans: `qp login` (device-code pairing, browser). Key is never a flag / logged.
  * Target environment via --env sandbox|uat|prod|dev-uat-sandbox (default sandbox
  * / REQPORT_ENV). `qp use <env>` switches the active stored login; `qp env` lists.
  */
@@ -13,7 +13,7 @@ import { resolveEnv } from "./env.js";
 import { ARM_SURFACE_BRIEF } from "./armSurface.js";
 import { explainError, err, reportCliError } from "./ui.js";
 
-const VERSION = "0.6.0";
+const VERSION = "0.9.0";
 
 async function main(): Promise<void> {
   const program = new Command();
