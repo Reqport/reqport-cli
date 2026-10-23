@@ -4,6 +4,10 @@
  * ReqportClient is mocked via vi.mock so no HTTP calls are made.
  * requireResponderCredential is mocked to return a stub credential.
  * Stdout is captured to assert on printed output.
+ *
+ * vitest 5 requires constructor mocks to use `function` (not arrow functions),
+ * because arrow functions cannot be invoked with `new`. Each
+ * mockImplementationOnce uses `function () { return {...}; }` for this reason.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,25 +16,21 @@ import { clearEnvKnobs } from "../helpers.js";
 
 // ── Module-level mocks (hoisted before imports) ──────────────────────────────
 
-vi.mock("../../src/client.js", () => ({
-  ReqportClient: vi.fn().mockImplementation(() => ({
-    proposeAuthority: vi.fn(),
-    listAuthorityReview: vi.fn(),
-    approveAuthorityReview: vi.fn(),
-  })),
-  ReqportApiError: class ReqportApiError extends Error {
-    status: number;
-    body: string;
-    path: string;
-    constructor(status: number, path: string, body: string) {
-      super(`${status} ${path}${body ? `: ${body}` : ""}`);
-      this.name = "ReqportApiError";
-      this.status = status;
-      this.path = path;
-      this.body = body;
-    }
-  },
-}));
+// vitest 5: use importOriginal so real exports like `redactValue` are preserved;
+// we only override ReqportClient with a spy constructor.
+vi.mock(import("../../src/client.js"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    ReqportClient: vi.fn().mockImplementation(function () {
+      return {
+        proposeAuthority: vi.fn(),
+        listAuthorityReview: vi.fn(),
+        approveAuthorityReview: vi.fn(),
+      };
+    }),
+  };
+});
 
 vi.mock("../../src/auth/session.js", () => ({
   requireResponderCredential: vi.fn().mockResolvedValue({
@@ -106,11 +106,13 @@ afterEach(() => {
 
 describe("qp authority propose", () => {
   it("calls proposeAuthority with the correct intake shape and prints the id", async () => {
-    vi.mocked(ReqportClient).mockImplementationOnce(() => ({
-      proposeAuthority: vi.fn().mockResolvedValue(SAMPLE_ITEM),
-      listAuthorityReview: vi.fn(),
-      approveAuthorityReview: vi.fn(),
-    }));
+    vi.mocked(ReqportClient).mockImplementationOnce(function () {
+      return {
+        proposeAuthority: vi.fn().mockResolvedValue(SAMPLE_ITEM),
+        listAuthorityReview: vi.fn(),
+        approveAuthorityReview: vi.fn(),
+      };
+    });
 
     const code = await runAuthorityPropose("sandbox", {
       domain: "polisen.se",
@@ -136,11 +138,13 @@ describe("qp authority propose", () => {
   });
 
   it("defaults country to EU and riskTier to STANDARD when not provided", async () => {
-    vi.mocked(ReqportClient).mockImplementationOnce(() => ({
-      proposeAuthority: vi.fn().mockResolvedValue(SAMPLE_ITEM),
-      listAuthorityReview: vi.fn(),
-      approveAuthorityReview: vi.fn(),
-    }));
+    vi.mocked(ReqportClient).mockImplementationOnce(function () {
+      return {
+        proposeAuthority: vi.fn().mockResolvedValue(SAMPLE_ITEM),
+        listAuthorityReview: vi.fn(),
+        approveAuthorityReview: vi.fn(),
+      };
+    });
 
     await runAuthorityPropose("sandbox", {
       domain: "example.eu",
@@ -156,11 +160,13 @@ describe("qp authority propose", () => {
   });
 
   it("prints JSON when --json is set", async () => {
-    vi.mocked(ReqportClient).mockImplementationOnce(() => ({
-      proposeAuthority: vi.fn().mockResolvedValue(SAMPLE_ITEM),
-      listAuthorityReview: vi.fn(),
-      approveAuthorityReview: vi.fn(),
-    }));
+    vi.mocked(ReqportClient).mockImplementationOnce(function () {
+      return {
+        proposeAuthority: vi.fn().mockResolvedValue(SAMPLE_ITEM),
+        listAuthorityReview: vi.fn(),
+        approveAuthorityReview: vi.fn(),
+      };
+    });
 
     const code = await runAuthorityPropose("sandbox", {
       domain: "polisen.se",
@@ -183,11 +189,13 @@ describe("qp authority list-pending", () => {
       { ...SAMPLE_ITEM, proposedByMe: true },
       { ...SAMPLE_ITEM, id: "rev-5678-wxyz", proposedByMe: false },
     ];
-    vi.mocked(ReqportClient).mockImplementationOnce(() => ({
-      proposeAuthority: vi.fn(),
-      listAuthorityReview: vi.fn().mockResolvedValue(items),
-      approveAuthorityReview: vi.fn(),
-    }));
+    vi.mocked(ReqportClient).mockImplementationOnce(function () {
+      return {
+        proposeAuthority: vi.fn(),
+        listAuthorityReview: vi.fn().mockResolvedValue(items),
+        approveAuthorityReview: vi.fn(),
+      };
+    });
 
     const code = await runAuthorityListPending("sandbox", { json: false });
 
@@ -201,11 +209,13 @@ describe("qp authority list-pending", () => {
   });
 
   it("passes a custom status filter to listAuthorityReview", async () => {
-    vi.mocked(ReqportClient).mockImplementationOnce(() => ({
-      proposeAuthority: vi.fn(),
-      listAuthorityReview: vi.fn().mockResolvedValue([]),
-      approveAuthorityReview: vi.fn(),
-    }));
+    vi.mocked(ReqportClient).mockImplementationOnce(function () {
+      return {
+        proposeAuthority: vi.fn(),
+        listAuthorityReview: vi.fn().mockResolvedValue([]),
+        approveAuthorityReview: vi.fn(),
+      };
+    });
 
     await runAuthorityListPending("sandbox", { status: "APPROVED", json: false });
 
@@ -214,11 +224,13 @@ describe("qp authority list-pending", () => {
   });
 
   it("prints an empty-queue message when no items are returned", async () => {
-    vi.mocked(ReqportClient).mockImplementationOnce(() => ({
-      proposeAuthority: vi.fn(),
-      listAuthorityReview: vi.fn().mockResolvedValue([]),
-      approveAuthorityReview: vi.fn(),
-    }));
+    vi.mocked(ReqportClient).mockImplementationOnce(function () {
+      return {
+        proposeAuthority: vi.fn(),
+        listAuthorityReview: vi.fn().mockResolvedValue([]),
+        approveAuthorityReview: vi.fn(),
+      };
+    });
 
     const code = await runAuthorityListPending("sandbox", { json: false });
 
@@ -227,11 +239,13 @@ describe("qp authority list-pending", () => {
   });
 
   it("prints JSON when --json is set", async () => {
-    vi.mocked(ReqportClient).mockImplementationOnce(() => ({
-      proposeAuthority: vi.fn(),
-      listAuthorityReview: vi.fn().mockResolvedValue([SAMPLE_ITEM]),
-      approveAuthorityReview: vi.fn(),
-    }));
+    vi.mocked(ReqportClient).mockImplementationOnce(function () {
+      return {
+        proposeAuthority: vi.fn(),
+        listAuthorityReview: vi.fn().mockResolvedValue([SAMPLE_ITEM]),
+        approveAuthorityReview: vi.fn(),
+      };
+    });
 
     const code = await runAuthorityListPending("sandbox", { json: true });
 
@@ -252,11 +266,13 @@ describe("qp authority approve", () => {
       decidedAt: "2026-10-23T11:00:00Z",
       decidedByPrincipalId: "usr-xyz",
     };
-    vi.mocked(ReqportClient).mockImplementationOnce(() => ({
-      proposeAuthority: vi.fn(),
-      listAuthorityReview: vi.fn(),
-      approveAuthorityReview: vi.fn().mockResolvedValue(approved),
-    }));
+    vi.mocked(ReqportClient).mockImplementationOnce(function () {
+      return {
+        proposeAuthority: vi.fn(),
+        listAuthorityReview: vi.fn(),
+        approveAuthorityReview: vi.fn().mockResolvedValue(approved),
+      };
+    });
 
     const code = await runAuthorityApprove("sandbox", "rev-1234-abcd", { json: false });
 
@@ -270,11 +286,13 @@ describe("qp authority approve", () => {
 
   it("prints JSON when --json is set", async () => {
     const approved: ReviewItem = { ...SAMPLE_ITEM, status: "APPROVED" };
-    vi.mocked(ReqportClient).mockImplementationOnce(() => ({
-      proposeAuthority: vi.fn(),
-      listAuthorityReview: vi.fn(),
-      approveAuthorityReview: vi.fn().mockResolvedValue(approved),
-    }));
+    vi.mocked(ReqportClient).mockImplementationOnce(function () {
+      return {
+        proposeAuthority: vi.fn(),
+        listAuthorityReview: vi.fn(),
+        approveAuthorityReview: vi.fn().mockResolvedValue(approved),
+      };
+    });
 
     const code = await runAuthorityApprove("sandbox", "rev-1234-abcd", { json: true });
 
