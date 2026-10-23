@@ -8,12 +8,17 @@
  * / REQPORT_ENV). `qp use <env>` switches the active stored login; `qp env` lists.
  */
 
+import { createRequire } from "node:module";
 import { Command } from "commander";
 import { resolveEnv } from "./env.js";
 import { ARM_SURFACE_BRIEF } from "./armSurface.js";
 import { explainError, err, reportCliError } from "./ui.js";
 
-const VERSION = "0.6.0";
+// Read the version at runtime from the installed package.json so that
+// `qp --version` always reflects the published package version rather
+// than a constant that drifts out of sync.
+const _require = createRequire(import.meta.url);
+const VERSION: string = (_require("../package.json") as { version: string }).version;
 
 async function main(): Promise<void> {
   const program = new Command();
