@@ -3,6 +3,7 @@ import {
   KNOWN_ENVS,
   baseUrlFor,
   credentialBaseUrl,
+  defaultPortalUrlForEnv,
   isReqportEnv,
   resolveBaseUrl,
   resolveEnv,
@@ -105,5 +106,25 @@ describe("resolveBaseUrl precedence", () => {
 
   it("3) falls back to the static map with no credential at all", () => {
     expect(resolveBaseUrl("sandbox")).toBe("https://sandbox.reqport.com/vanta");
+  });
+});
+
+// ── defaultPortalUrlForEnv ────────────────────────────────────────────────────
+
+describe("defaultPortalUrlForEnv", () => {
+  it("returns dev-uat.reqport.com for uat", () => {
+    expect(defaultPortalUrlForEnv("uat")).toBe("https://dev-uat.reqport.com");
+  });
+
+  it("returns dev-uat.reqport.com for dev-uat-sandbox", () => {
+    expect(defaultPortalUrlForEnv("dev-uat-sandbox")).toBe("https://dev-uat.reqport.com");
+  });
+
+  it("returns reqport.com for prod", () => {
+    expect(defaultPortalUrlForEnv("prod")).toBe("https://reqport.com");
+  });
+
+  it("returns reqport.com for sandbox", () => {
+    expect(defaultPortalUrlForEnv("sandbox")).toBe("https://reqport.com");
   });
 });

@@ -9,14 +9,25 @@
  */
 
 import type { ReqportEnv } from "../env.js";
-import { credentialBaseUrl, maskKey } from "../env.js";
+import { credentialBaseUrl, defaultPortalUrlForEnv, maskKey } from "../env.js";
 import { isLoggedIn, logout, loginSummary } from "../auth/session.js";
-import { DEFAULT_PORTAL_URL, runPairing } from "../auth/pairing.js";
+import { runPairing } from "../auth/pairing.js";
 import { saveCredential } from "../auth/store.js";
 import { err, line, printJson } from "../ui.js";
 
-function resolvePortalUrl(flag?: string): string {
-  const v = flag || process.env.QP_PORTAL_URL || DEFAULT_PORTAL_URL;
+/**
+ * Resolve the portal base URL. Precedence:
+ *   1. explicit --portal-url flag
+ *   2. QP_PORTAL_URL env var
+ *   3. the env-specific default (uat/dev-uat-sandbox → dev-uat.reqport.com,
+ *      sandbox/prod → reqport.com)
+ *
+ * Each environment has its own Signicat client baked into its portal
+ * deployment, so pointing at the wrong portal causes an "invalid pairing
+ * link" error on the cli-auth page.
+ */
+function resolvePortalUrl(flag: string | undefined, env: ReqportEnv): string {
+  const v = flag || process.env.QP_PORTAL_URL || defaultPortalUrlForEnv(env);
   return v.replace(/\/$/, "");
 }
 
@@ -26,7 +37,7 @@ export async function runLogin(opts: {
   name?: string;
   json?: boolean;
 }): Promise<number> {
-  const portalUrl = resolvePortalUrl(opts.portalUrl);
+  const portalUrl = resolvePortalUrl(opts.portalUrl, opts.env);
   const locale = process.env.QP_LOCALE || "en";
 
   const progress = (m: string) => err(m); // → stderr so --json stdout stays clean
