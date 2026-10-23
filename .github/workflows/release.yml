@@ -47,6 +47,19 @@ jobs:
       - name: Install
         run: npm ci
 
+      # Until 2026-10-22 this job went straight from install to build to
+      # publish. It never typechecked and it never ran the 101 tests in test/,
+      # so a tag could put a broken build on npm under a Trusted Publishing
+      # provenance attestation -- an attestation that says truthfully where the
+      # artifact came from and nothing at all about whether it works.
+      # `checks` runs these on every PR and on main; this is the last gate
+      # before the artifact leaves the building.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
       - name: Build
         run: npm run build
 
