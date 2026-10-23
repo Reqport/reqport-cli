@@ -24,8 +24,10 @@ import type {
   AttachmentDownload,
   AttachmentView,
   AttestationResponse,
+  AuthorityIntake,
   OrgStates,
   RequestorRuleset,
+  ReviewItem,
   RulesetRule,
   BusinessRelationshipAnswer,
   ChatDetail,
@@ -962,6 +964,47 @@ export class ReqportClient {
     return this.request<KycResponseView>(
       `/v1/requests/${encodeURIComponent(requestId)}/kyc-response`,
       { method: "GET" }
+    );
+  }
+
+  // ── Staff oracle: authority onboarding proposal + maker-checker review ────────
+
+  /**
+   * POST /v1/staff/oracle/authority — propose a new authority intake.
+   * Staff JWT required (personal login, not an API key). Vanta returns a
+   * ReviewItem in PENDING state that a second staff member must approve before
+   * the authority is registered.
+   */
+  proposeAuthority(intake: AuthorityIntake): Promise<ReviewItem> {
+    return this.request<ReviewItem>(`/v1/staff/oracle/authority`, {
+      method: "POST",
+      body: JSON.stringify(intake),
+    });
+  }
+
+  /**
+   * GET /v1/staff/oracle/authority/review — list review queue items. `status`
+   * defaults to "PENDING" when omitted. Staff JWT required.
+   */
+  listAuthorityReview(status?: string): Promise<ReviewItem[]> {
+    const q = new URLSearchParams();
+    if (status) q.set("status", status);
+    const query = q.toString() ? `?${q.toString()}` : "";
+    return this.request<ReviewItem[]>(`/v1/staff/oracle/authority/review${query}`, {
+      method: "GET",
+    });
+  }
+
+  /**
+   * POST /v1/staff/oracle/authority/review/{id}/approve — approve a pending
+   * authority intake. Staff JWT required; the approver must be different from
+   * the proposer (maker-checker). Returns the updated ReviewItem with
+   * status APPROVED.
+   */
+  approveAuthorityReview(id: string): Promise<ReviewItem> {
+    return this.request<ReviewItem>(
+      `/v1/staff/oracle/authority/review/${encodeURIComponent(id)}/approve`,
+      { method: "POST", idempotent: true }
     );
   }
 }

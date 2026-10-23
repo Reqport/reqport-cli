@@ -1145,3 +1145,36 @@ export type DecodedPayload = {
   json?: unknown;
   errorCode?: string | null;
 };
+
+// ── Staff oracle: authority onboarding proposal + maker-checker review ────────
+
+/**
+ * POST /v1/staff/oracle/authority — propose a new authority intake.
+ * All fields are sent to vanta as-is; countryCode is ISO 3166-1 alpha-2
+ * (or the synthetic "EU" for pan-EU entries). riskTier drives auto-approve logic.
+ */
+export interface AuthorityIntake {
+  domain: string;
+  agencyName: string;
+  /** ISO 3166-1 alpha-2, e.g. "EU" or "SE". */
+  countryCode: string;
+  sourceUrl: string;
+  riskTier: "STANDARD" | "AUTO_APPROVE";
+}
+
+/**
+ * A review queue item returned by the staff oracle authority endpoints.
+ * Forward-compatible: unknown fields are ignored.
+ */
+export interface ReviewItem {
+  id: string;
+  kind: string;
+  summary: string;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  proposedByPrincipalId: string;
+  proposedAt: string;
+  proposedByMe?: boolean;
+  decidedByPrincipalId?: string | null;
+  decidedAt?: string | null;
+  detail?: Record<string, unknown>;
+}
