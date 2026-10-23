@@ -324,11 +324,25 @@ async function main(): Promise<void> {
 
   pending
     .command("list")
-    .description("List this org's held responses awaiting approval (GET /v1/responses/pending)")
+    .description(
+      "List this org's PENDING and REPLACED held responses (GET /v1/responses/pending). Columns include status, label, and submittedBy."
+    )
     .action(() =>
       wrap(async () => {
         const { runPendingList } = await import("./commands/pending.js");
         return runPendingList(globalEnv(), { json: globalJson() });
+      })()
+    );
+
+  pending
+    .command("show <id>")
+    .description(
+      "Fetch one held response (GET /v1/responses/pending/{id}), including decided rows. The body is a list row and has no release id."
+    )
+    .action((id) =>
+      wrap(async () => {
+        const { runPendingShow } = await import("./commands/pending.js");
+        return runPendingShow(globalEnv(), id, { json: globalJson() });
       })()
     );
 

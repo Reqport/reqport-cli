@@ -16,7 +16,9 @@ export const ARM_SURFACE_BRIEF =
   "A released disposition (AUTO_RELEASE or RELEASED) that includes releaseId is forwarded with the gate shape unchanged, as header X-Reqport-Arm-Release-Id on POST /v3/workflows/{id}/respond. " +
   "That formal call is a single attempt and is not retried. The full release id is sent only on that header. " +
   "Logs, errors, JSON, and other output show the armrel_ prefix (armrel_…). An id without that prefix is [redacted]. HOLD and DECLINE send neither the header nor a shape. " +
-  "ARM_RELEASE_* errors print the server message and pass steer through. Each refusal says the answer was not sealed or sent. ARM_RELEASE_REPLAYED uses steer already-used; check the request status before trying again.";
+  "Free-text and unstructured authority types (UNSTRUCTURED_AUTHORITY_REQUEST_V1, UNSTRUCTURED_REQUEST_V1, AUTHORITY_REQUEST_V1, information, including INFORMATION_FOLLOWUP and edge.information.v1) are posted on the direct response path and never request a release id, whether or not authorityArmEnabled is set. " +
+  "ARM_RELEASE_* errors print the server message and pass steer through. Each refusal says the answer was not sealed or sent. ARM_RELEASE_REPLAYED uses steer already-used: a release id is used once; check the request status before trying again. " +
+  "Approving a replaced held row is HTTP 409 ARM_RELEASE_HELD_REPLACED. Approving an already-decided row is HTTP 409 ARM_RELEASE_HELD_ALREADY_DECIDED. Those bodies are returned unchanged and are not described as sealed and sent.";
 
 /** How the server classified a 2xx response body. Never inferred locally. */
 export type ServerDecision = "released" | "held" | "declined" | "unspecified";
@@ -76,6 +78,34 @@ export function serverDecision(result: {
   return "unspecified";
 }
 
+/**
+ * Workflow types ADR 0005 never puts through the ARM release-id gate.
+ * Matched case-insensitively. `information` covers AUTHORITY_REQUEST_V1's
+ * family, INFORMATION_FOLLOWUP, and the graph-native edges
+ * `edge.information.v1` / `edge.general-information.v1`.
+ */
+const DIRECT_FREE_TEXT_TYPES: ReadonlySet<string> = new Set([
+  "UNSTRUCTURED_AUTHORITY_REQUEST_V1",
+  "UNSTRUCTURED_REQUEST_V1",
+  "AUTHORITY_REQUEST_V1",
+  "INFORMATION",
+]);
+
+/**
+ * True when this workflow or response type must be sent directly.
+ * The client does not request a release id and does not send
+ * `X-Reqport-Arm-Release-Id`, whatever the org's ARM flag.
+ */
+export function isDirectFreeTextWorkflow(workflowType: string | undefined): boolean {
+  if (!workflowType) return false;
+  const normalized = workflowType.trim().toUpperCase().replace(/-/g, "_");
+  if (normalized === "") return false;
+  if (DIRECT_FREE_TEXT_TYPES.has(normalized)) return true;
+  if (normalized.includes("UNSTRUCTURED_AUTHORITY") || normalized.includes("UNSTRUCTURED_REQUEST")) return true;
+  // INFORMATION_FOLLOWUP, edge.information.v1, edge.general-information.v1.
+  return normalized.includes("INFORMATION");
+}
+
 /** Header vanta requires on the encrypted v3 formal respond. */
 export const ARM_RELEASE_ID_HEADER = "X-Reqport-Arm-Release-Id";
 
@@ -121,6 +151,20 @@ export function displayReleaseId(releaseId: string): string {
   const id = releaseId.trim();
   if (id.startsWith(ARM_RELEASE_ID_PREFIX)) return ARM_RELEASE_ID_VISIBLE;
   return RELEASE_ID_REDACTED;
+}
+
+/**
+ * Human-readable gate window. The server enforces expiry (`ARM_RELEASE_EXPIRED`);
+ * this only renders the fields the gate returned. Empty when neither is present.
+ */
+export function formatReleaseWindow(result: { expiresAt?: unknown; ttlSeconds?: unknown }): string | undefined {
+  const expiresAt = typeof result.expiresAt === "string" ? result.expiresAt.trim() : "";
+  const ttl =
+    typeof result.ttlSeconds === "number" && Number.isFinite(result.ttlSeconds) ? result.ttlSeconds : undefined;
+  if (expiresAt && ttl !== undefined) return `${expiresAt} (ttl ${ttl}s)`;
+  if (expiresAt) return expiresAt;
+  if (ttl !== undefined) return `ttl ${ttl}s`;
+  return undefined;
 }
 
 /** Replace any `armrel_…` token in text with the prefix. Leaves a bare `armrel_` as-is. */

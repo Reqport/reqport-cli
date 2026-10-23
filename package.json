@@ -1,6 +1,6 @@
 {
   "name": "@reqport/cli",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Reqport responder CLI + MCP server — discover, read, and answer content-blind data requests (e.g. Engagemangskontroll / business-relationship checks) with an rqk_live_ API key.",
   "keywords": [
     "reqport",
@@ -50,7 +50,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/sdk": "1.32.0",
     "commander": "12.1.0",
     "zod": "3.25.76"
   },

@@ -134,6 +134,12 @@ Key points:
   still not be enough — a **free-text information** request (`information-followup`,
   or standalone `POST /v1/requests/information`) asks for more in plain language,
   answered on the generic response path (`qp respond --status COMP --free-text`).
+  Free-text / UAR types (`UNSTRUCTURED_AUTHORITY_REQUEST_V1`,
+  `UNSTRUCTURED_REQUEST_V1`, `AUTHORITY_REQUEST_V1` / `information`, including
+  `INFORMATION_FOLLOWUP` and `edge.information.v1`) are never release-id gated.
+  The CLI posts those answers directly and does not request a release id, whatever
+  the org's `authorityArmEnabled` flag. Structured answers still use the two-step
+  when the server returns a released `releaseId`.
 - **Identifier-first entry:** when the authority *already* holds the identifier (a
   wallet from another investigation), it skips the BR check and asks a known holder
   directly (`POST /v1/requests/transaction-history` | `/kyc`, no `relatesTo`). You
@@ -192,7 +198,7 @@ Key points:
 
    Under **outbound gating** every submitted answer is *held* for approval unless a
    rule releases it (see the ARM flow above). Manage the hold queue with
-   `qp pending list|approve|reject|withdraw`, and the outbound-gating rules with
+   `qp pending list|show|approve|reject|withdraw`, and the outbound-gating rules with
    `qp requestor-ruleset get|add|set|clear` (inspect a requestor's verified status
    first with `qp org-states <orgId>`). And `qp arm` prints this whole flow.
 
@@ -340,15 +346,29 @@ npx @reqport/cli mcp        # REQPORT_API_KEY + REQPORT_ENV from the environment
 Tools: `reqport_doctor`, `reqport_list_requests`, `reqport_show_request`,
 `reqport_decrypt_payloads`, `reqport_respond_business_relationship` (accepts
 `relationshipTypes`), `reqport_respond`, the human-in-the-loop tools
-`reqport_pending_list`, `reqport_pending_approve`, `reqport_pending_reject`,
-`reqport_pending_withdraw`, the FIR tools `reqport_fir_list`,
-`reqport_fir_show`, `reqport_fir_notify`, `reqport_fir_respond`,
-`reqport_fir_instruct_refund`, `reqport_fir_confirm_refund`,
+`reqport_pending_list`, `reqport_pending_show`, `reqport_pending_approve`,
+`reqport_pending_send`, `reqport_pending_reject`, `reqport_pending_withdraw`,
+the FIR tools `reqport_fir_list`, `reqport_fir_show`, `reqport_fir_notify`,
+`reqport_fir_respond`, `reqport_fir_instruct_refund`, `reqport_fir_confirm_refund`,
 `reqport_fir_identity_request`, `reqport_fir_identity_respond`, and the KYC/CDD tools
 `reqport_kyc_list`, `reqport_kyc_show`, `reqport_kyc_respond` (bodies snake_case).
 Each accepts an optional `env`; the credential comes from the
 server process environment. The MCP server is **API-key-only** — `qp login` is a
 human/CLI concern and is not exposed as a tool.
+
+`reqport_pending_approve` only calls `POST /v1/responses/pending/{id}/approve`.
+It never sends. On a structured release the result includes the release id
+redacted as elsewhere, the release window, and the next step.
+`reqport_pending_send` posts the irreversible v3 formal respond with
+`X-Reqport-Arm-Release-Id`. It requires `confirm: true` and the request id
+echoed by approve. The header uses only the release id held for that request.
+If none is held, or a passed release id differs from the held one, the tool
+refuses and makes no network call. The hold is deleted before the POST, so a
+retry cannot replay it. The send is irreversible and the release id can be
+used only once. Free-text and UAR types are not release-id gated and that tool
+refuses them. `qp pending approve` stays the combined approve-then-send
+command and uses the same held-id rule: it stores the release for that request,
+then deletes it before the formal POST.
 
 ## Definition of done
 

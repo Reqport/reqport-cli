@@ -359,6 +359,11 @@ export type ResponseResult = {
   status?: string;
   itemCount?: number;
   createdAt?: string;
+  /** Held-response id when the ruleset parked the answer. */
+  pendingResponseId?: string;
+  /** Gate window. The server enforces it; the client only displays it. */
+  expiresAt?: string;
+  ttlSeconds?: number;
   /**
    * Present when the ruleset (or a human release) actually released the answer.
    * Forwarded as `X-Reqport-Arm-Release-Id` on the v3 formal respond. Absent on HOLD/DECLINE.
@@ -509,7 +514,21 @@ export type PendingResponse = {
   /** The auth.002 outcome the held response would carry (e.g. COMP | NFOU). */
   auth002Status?: string;
   createdAt?: string;
+  /** Older list bodies. The live view uses {@link submittedBy}. */
   submitter?: string;
+  /** GET /v1/responses/pending — who submitted the held answer. */
+  submittedBy?: string;
+  /** PENDING, REPLACED, APPROVED, REJECTED, WITHDRAWN, or DECLINED. */
+  status?: string;
+  /** Set for every status except PENDING, which omits it. */
+  label?: string;
+  /** On a REPLACED row: newer-submission or decline. */
+  closedBy?: string;
+  decisionReason?: string;
+  /** Not present on a list or GET row. Approve may return one for a structured release. */
+  releaseId?: string;
+  expiresAt?: string;
+  ttlSeconds?: number;
   [k: string]: unknown;
 };
 
@@ -529,8 +548,13 @@ export type PendingActionResult = {
   status?: string;
   messageId?: string;
   requestId?: string;
+  /** Workflow or response type. Free-text / UAR values are not release-id forwarded. */
+  responseType?: string;
   /** Set when a human approve actually releases. Forwarded on the v3 formal respond. */
   releaseId?: string;
+  expiresAt?: string;
+  ttlSeconds?: number;
+  decisionReason?: string;
   approvalState?: string;
   action?: string;
   disposition?: string;
