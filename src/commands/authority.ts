@@ -42,18 +42,13 @@ export async function runAuthorityPropose(
 ): Promise<number> {
   if (!opts.domain) throw new Error("--domain <domain> is required.");
   if (!opts.name) throw new Error("--name <name> is required.");
-
-  if (!opts.source) {
-    err(
-      `Note: --source not provided; please verify the agency source URL manually after onboarding.`
-    );
-  }
+  if (!opts.source) throw new Error("--source <url> is required (a URL evidencing the agency is real, e.g. its official homepage).");
 
   const intake: AuthorityIntake = {
     domain: opts.domain,
     agencyName: opts.name,
     countryCode: opts.country ?? "EU",
-    sourceUrl: opts.source ?? "",
+    sourceUrl: opts.source,
     riskTier: (opts.riskTier ?? "STANDARD") as "STANDARD" | "AUTO_APPROVE",
   };
 

@@ -145,6 +145,7 @@ describe("qp authority propose", () => {
     await runAuthorityPropose("sandbox", {
       domain: "example.eu",
       name: "Test Agency",
+      source: "https://example.eu",
       json: false,
     });
 
@@ -164,6 +165,7 @@ describe("qp authority propose", () => {
     const code = await runAuthorityPropose("sandbox", {
       domain: "polisen.se",
       name: "Polisen",
+      source: "https://polisen.se",
       json: true,
     });
 
