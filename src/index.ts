@@ -930,6 +930,64 @@ async function main(): Promise<void> {
       })()
     );
 
+  // ── authority (staff authority management) ────────────────────────────────
+  const authority = program
+    .command("authority")
+    .description("Staff: propose and approve authority onboarding items (maker-checker flow)");
+
+  authority
+    .command("propose")
+    .description("Propose a new authority intake (POST /v1/staff/oracle/authority)")
+    .requiredOption("--domain <domain>", "authority domain (e.g. polisen.se)")
+    .requiredOption("--name <name>", "agency display name")
+    .option("--country <cc>", "ISO 3166-1 alpha-2 country code (default EU)", "EU")
+    .option("--source <url>", "source URL for the authority listing (optional; verify manually when absent)")
+    .option("--risk-tier <tier>", "risk tier: STANDARD | AUTO_APPROVE (default STANDARD)", "STANDARD")
+    .action((opts) =>
+      wrap(async () => {
+        const { runAuthorityPropose } = await import("./commands/authority.js");
+        return runAuthorityPropose(globalEnv(), {
+          domain: opts.domain,
+          name: opts.name,
+          country: opts.country,
+          source: opts.source,
+          riskTier: opts.riskTier,
+          json: globalJson(),
+        });
+      })()
+    );
+
+  authority
+    .command("list-pending")
+    .description(
+      "List authority review queue items (GET /v1/staff/oracle/authority/review). " +
+        "Rows where BY ME=(you) cannot be self-approved (maker-checker)."
+    )
+    .option("--status <status>", "filter by status: PENDING | APPROVED | REJECTED", "PENDING")
+    .action((opts) =>
+      wrap(async () => {
+        const { runAuthorityListPending } = await import("./commands/authority.js");
+        return runAuthorityListPending(globalEnv(), {
+          status: opts.status,
+          json: globalJson(),
+        });
+      })()
+    );
+
+  authority
+    .command("approve <id>")
+    .description(
+      "Approve a pending authority intake " +
+        "(POST /v1/staff/oracle/authority/review/{id}/approve). " +
+        "Maker-checker: you cannot approve your own proposal."
+    )
+    .action((id) =>
+      wrap(async () => {
+        const { runAuthorityApprove } = await import("./commands/authority.js");
+        return runAuthorityApprove(globalEnv(), id as string, { json: globalJson() });
+      })()
+    );
+
   // ── doctor ────────────────────────────────────────────────────────────────
   program
     .command("doctor")
