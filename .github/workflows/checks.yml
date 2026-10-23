@@ -1,0 +1,121 @@
+name: checks
+
+# WHY THIS FILE EXISTS
+# --------------------
+# Until now reqport-cli had exactly one workflow: release.yml, which publishes
+# to npm when a v* tag is pushed. It runs `npm ci` and `npm run build`. It does
+# not typecheck and it does not test.
+#
+# So on 2026-10-22 this repository held 10 open Dependabot pull requests, and
+# every single one of them reported "All checks have passed". The only check
+# that had run was CodeQL, returning NEUTRAL -- the result CodeQL gives when it
+# has nothing to say. Meanwhile 101 tests sat in test/ and not one of them ran:
+# not on a pull request, not on main, not before publish to npm.
+#
+# A green tick with nothing behind it is worse than a red one, and worse than no
+# tick at all, because it answers the question the reviewer was about to ask.
+# Ten dependency bumps -- among them a vitest 2 -> 5 jump across three major
+# versions -- were sitting there pre-approved by a signal that measured nothing.
+#
+# This job is what that signal is supposed to mean.
+
+# TRIGGERS -- and which of them prevents anything
+# -----------------------------------------------
+#   pull_request  -- fast feedback, evaluated against the merge result.
+#                    DETECTS. It cannot prevent: the merge result is computed
+#                    when the branch was last pushed and is not recomputed when
+#                    main moves underneath it.
+#   push: main    -- the backstop. release.yml fires on a tag, which is cut from
+#                    main, so without this a break could reach main and sit
+#                    there unremarked until someone opened the next PR.
+#                    DETECTS -- a commit already on main cannot be prevented.
+#   merge_group   -- the only trigger here that PREVENTS, and only once a merge
+#                    queue is enabled on this repository. Inert until then, and
+#                    turning it on is a repository setting, not a change to this
+#                    file. A queue needs EVERY required context to run on
+#                    merge_group or an entry never completes; `checks` is wired
+#                    for it here.
+#
+# None of this gates anything until `checks` is made a REQUIRED status check on
+# main. Adding this file makes the tests visible; the branch protection setting
+# is what makes them load-bearing, and that is one click in repository settings
+# that no commit can make for you.
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # 20 is what release.yml publishes on, so it is the version the
+        # published artifact is actually built by. 24 is current. package.json
+        # declares engines.node >= 18, so users run this on a wide range and a
+        # single version would not speak for them.
+        node: [ "20", "24" ]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npx vitest run --reporter=json --outputFile=vitest-report.json
+
+      # THE CANARY. The step above can exit 0 having run nothing at all -- a
+      # broken `include` glob in vitest.config.ts, a renamed test/ directory, a
+      # reporter that swallows the failure. That is the exact shape of the
+      # problem this whole file was added to fix, so the suite is not allowed to
+      # report success without saying how much it ran.
+      #
+      # The floor is deliberately below the current count (101 on 2026-10-22):
+      # it is here to catch "nothing ran", not to freeze the suite's size.
+      # Raise it when the suite grows enough that 90 stops being a real floor.
+      - name: The suite must actually have run
+        run: |
+          set -eu
+          MIN=90
+          test -f vitest-report.json || { echo "::error::no vitest report was written -- the suite did not run"; exit 1; }
+          TOTAL=$(node -p "require('./vitest-report.json').numTotalTests ?? 0")
+          FAILED=$(node -p "require('./vitest-report.json').numFailedTests ?? 0")
+          echo "vitest reported ${TOTAL} tests, ${FAILED} failed (floor is ${MIN})"
+          if [ "$FAILED" -ne 0 ]; then
+            echo "::error::${FAILED} test(s) failed"; exit 1
+          fi
+          if [ "$TOTAL" -lt "$MIN" ]; then
+            echo "::error::vitest reported only ${TOTAL} tests, below the floor of ${MIN}. Either the suite shrank on purpose -- then lower this floor in the same commit and say why -- or the runner stopped finding tests and this job was about to pass on silence."
+            exit 1
+          fi
+
+      - name: Build
+        run: npm run build
+
+      # The published artifact is dist/index.js, exposed as the `qp` bin. Build
+      # succeeding is not the same as the entrypoint being runnable: a bad
+      # import or a missing shebang shows up here and nowhere else.
+      - name: The built entrypoint runs
+        run: node dist/index.js --help
