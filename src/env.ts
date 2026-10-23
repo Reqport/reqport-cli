@@ -21,6 +21,29 @@ const BASE_URLS: Record<ReqportEnv, string> = {
   "dev-uat-sandbox": "https://dev-uat-sandbox.reqport.com/vanta",
 };
 
+/**
+ * Portal (Reqport console) base URL for each environment.
+ *
+ * The portal-pairing login flow opens the portal's /en/developer/cli-auth page
+ * to mint a key. Each environment has its own portal deployment with its own
+ * Signicat client — using the wrong portal URL results in an "invalid pairing
+ * link" error because the JWT issuer won't match the target vanta.
+ *
+ *   sandbox / prod   → https://reqport.com        (prod Signicat client)
+ *   uat / dev-uat-sandbox → https://dev-uat.reqport.com  (dev-uat Signicat client)
+ */
+const PORTAL_URLS: Record<ReqportEnv, string> = {
+  sandbox: "https://reqport.com",
+  prod: "https://reqport.com",
+  uat: "https://dev-uat.reqport.com",
+  "dev-uat-sandbox": "https://dev-uat.reqport.com",
+};
+
+/** Default portal base URL for a given environment. */
+export function defaultPortalUrlForEnv(env: ReqportEnv): string {
+  return PORTAL_URLS[env];
+}
+
 /** The known static environments, in display order (az-cli-style `qp env` list). */
 export const KNOWN_ENVS: readonly ReqportEnv[] = [
   "sandbox",
