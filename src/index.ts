@@ -941,7 +941,7 @@ async function main(): Promise<void> {
     .requiredOption("--domain <domain>", "authority domain (e.g. polisen.se)")
     .requiredOption("--name <name>", "agency display name")
     .option("--country <cc>", "ISO 3166-1 alpha-2 country code (default EU)", "EU")
-    .option("--source <url>", "source URL for the authority listing (optional; verify manually when absent)")
+    .requiredOption("--source <url>", "source URL evidencing the agency is real (e.g. official homepage)")
     .option("--risk-tier <tier>", "risk tier: STANDARD | AUTO_APPROVE (default STANDARD)", "STANDARD")
     .action((opts) =>
       wrap(async () => {
