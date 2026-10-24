@@ -73,6 +73,7 @@ async function callAuthorize(
   const params = new URLSearchParams({ challenge, state });
   if (hint) params.set("hint", hint);
   const url = `${portalUrl}/api/developer/staff-auth/authorize?${params.toString()}`;
+  const resp = await fetch(url, { headers: { Accept: "application/json" } });
   if (!resp.ok) {
     const body = await resp.text().catch(() => "");
     throw new Error(`Portal returned HTTP ${resp.status} from authorize: ${body}`);
