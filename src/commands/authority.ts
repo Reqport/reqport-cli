@@ -55,7 +55,7 @@ export async function runAuthorityPropose(
 
   const client = new ReqportClient({
     env,
-    credential: (await requireStaffCredential(env)) as unknown as Credential,
+    credential: (await requireStaffCredential(env)) ,
   });
   const item = await client.proposeAuthority(intake);
 
@@ -90,7 +90,7 @@ export async function runAuthorityListPending(
   const status = opts.status ?? "PENDING";
   const client = new ReqportClient({
     env,
-    credential: (await requireStaffCredential(env)) as unknown as Credential,
+    credential: (await requireStaffCredential(env)) ,
   });
   const items = await client.listAuthorityReview(status);
 
@@ -134,7 +134,7 @@ export async function runAuthorityApprove(
 ): Promise<number> {
   const client = new ReqportClient({
     env,
-    credential: (await requireStaffCredential(env)) as unknown as Credential,
+    credential: (await requireStaffCredential(env)) ,
   });
   const item = await client.approveAuthorityReview(id);
 
