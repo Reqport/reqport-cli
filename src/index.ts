@@ -59,6 +59,7 @@ async function main(): Promise<void> {
     .option("--portal-url <url>", "portal base URL (default https://reqport.com or QP_PORTAL_URL)")
     .option("--name <keyName>", "requested display name for the minted key")
     .option("--staff", "staff login: authenticate via Signicat through the portal broker", false)
+    .option("--email <email>", "staff email for Signicat login_hint (prompted if omitted)")
     .action((opts) =>
       wrap(async () => {
         if (opts.staff) {
@@ -66,6 +67,7 @@ async function main(): Promise<void> {
           return runStaffLogin({
             env: globalEnv(),
             portalUrl: opts.portalUrl,
+            email: opts.email,
             json: globalJson(),
           });
         }

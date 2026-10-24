@@ -13,7 +13,7 @@ import { credentialBaseUrl, defaultPortalUrlForEnv, maskKey } from "../env.js";
 import { isLoggedIn, logout, loginSummary } from "../auth/session.js";
 import { runPairing } from "../auth/pairing.js";
 import { saveCredential } from "../auth/store.js";
-import { saveStaffCredential } from "../auth/staffStore.js";
+import { saveStaffCredential, loadStaffCredential } from "../auth/staffStore.js";
 import { runStaffLogin as _runStaffLogin } from "../auth/staffLogin.js";
 import { err, line, printJson } from "../ui.js";
 
@@ -104,12 +104,18 @@ export async function runLogin(opts: {
 export async function runStaffLogin(opts: {
   env: ReqportEnv;
   portalUrl?: string;
+  email?: string;
   json?: boolean;
 }): Promise<number> {
   const portalUrl = resolvePortalUrl(opts.portalUrl, opts.env);
   const progress = (m: string) => err(m); // → stderr so --json stdout stays clean
 
-  const result = await _runStaffLogin({ portalUrl, env: opts.env }, progress);
+  // Reuse the email from a previous staff login as the Signicat login_hint so
+  // returning users don't have to type it again. A fresh --email flag overrides.
+  const existingEmail = loadStaffCredential(opts.env)?.email;
+  const email = opts.email?.trim() || existingEmail;
+
+  const result = await _runStaffLogin({ portalUrl, env: opts.env, email }, progress);
 
   saveStaffCredential({
     bearer: result.bearer,

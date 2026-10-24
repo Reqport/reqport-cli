@@ -13,6 +13,7 @@
 
 import { createServer } from "node:http";
 import type { Server } from "node:http";
+import * as rl from "node:readline/promises";
 import { createPkce, randomState } from "./pkce.js";
 import { openBrowser } from "./openBrowser.js";
 
@@ -51,16 +52,27 @@ async function startCallbackServer(): Promise<Server> {
   });
 }
 
+/** Prompt for the staff email on stderr (so --json stdout stays clean). */
+async function promptEmail(): Promise<string> {
+  const iface = rl.createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    const answer = await iface.question("Enter your @reqport.com email: ");
+    return answer.trim();
+  } finally {
+    iface.close();
+  }
+}
+
 /** GET the authorize endpoint, returning {authUrl, session}. */
 async function callAuthorize(
   portalUrl: string,
   challenge: string,
-  state: string
+  state: string,
+  hint?: string
 ): Promise<AuthorizeResponse> {
-  const url =
-    `${portalUrl}/api/developer/staff-auth/authorize` +
-    `?challenge=${encodeURIComponent(challenge)}&state=${encodeURIComponent(state)}`;
-  const resp = await fetch(url, { headers: { Accept: "application/json" } });
+  const params = new URLSearchParams({ challenge, state });
+  if (hint) params.set("hint", hint);
+  const url = `${portalUrl}/api/developer/staff-auth/authorize?${params.toString()}`;
   if (!resp.ok) {
     const body = await resp.text().catch(() => "");
     throw new Error(`Portal returned HTTP ${resp.status} from authorize: ${body}`);
@@ -127,11 +139,18 @@ function waitForCallback(server: Server): Promise<CallbackResult> {
 }
 
 export async function runStaffLogin(
-  opts: { portalUrl: string; env: string; timeoutMs?: number },
+  opts: { portalUrl: string; env: string; timeoutMs?: number; email?: string },
   progress: (msg: string) => void
 ): Promise<StaffLoginResult> {
   const portalUrl = opts.portalUrl.replace(/\/$/, "");
   const timeoutMs = opts.timeoutMs ?? 5 * 60_000;
+
+  // Resolve the hint email before opening the server so that if the user
+  // cancels the prompt the port is never claimed.
+  let hint = opts.email?.trim() || "";
+  if (!hint) {
+    hint = await promptEmail();
+  }
 
   const { verifier, challenge } = createPkce();
   const state = randomState();
@@ -143,7 +162,7 @@ export async function runStaffLogin(
   //    the port isn't left open if the portal call fails.
   let authorizeResult: AuthorizeResponse;
   try {
-    authorizeResult = await callAuthorize(portalUrl, challenge, state);
+    authorizeResult = await callAuthorize(portalUrl, challenge, state, hint || undefined);
   } catch (e) {
     server.close();
     throw e;
