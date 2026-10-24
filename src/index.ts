@@ -52,11 +52,23 @@ async function main(): Promise<void> {
   // ── login / logout / whoami ────────────────────────────────────────────────
   program
     .command("login")
-    .description("Pair with the Reqport console (browser) to receive an API key — no callback, no OAuth client")
+    .description(
+      "Pair with the Reqport console (browser) to receive an API key.\n" +
+        "Use --staff to authenticate as a Reqport staff member via Signicat (required for `qp authority` commands)."
+    )
     .option("--portal-url <url>", "portal base URL (default https://reqport.com or QP_PORTAL_URL)")
     .option("--name <keyName>", "requested display name for the minted key")
+    .option("--staff", "staff login: authenticate via Signicat through the portal broker", false)
     .action((opts) =>
       wrap(async () => {
+        if (opts.staff) {
+          const { runStaffLogin } = await import("./commands/login.js");
+          return runStaffLogin({
+            env: globalEnv(),
+            portalUrl: opts.portalUrl,
+            json: globalJson(),
+          });
+        }
         const { runLogin } = await import("./commands/login.js");
         return runLogin({
           env: globalEnv(),

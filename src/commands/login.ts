@@ -13,6 +13,8 @@ import { credentialBaseUrl, defaultPortalUrlForEnv, maskKey } from "../env.js";
 import { isLoggedIn, logout, loginSummary } from "../auth/session.js";
 import { runPairing } from "../auth/pairing.js";
 import { saveCredential } from "../auth/store.js";
+import { saveStaffCredential } from "../auth/staffStore.js";
+import { runStaffLogin as _runStaffLogin } from "../auth/staffLogin.js";
 import { err, line, printJson } from "../ui.js";
 
 /**
@@ -87,6 +89,51 @@ export async function runLogin(opts: {
     line(`  key:     ${maskKey(result.apiKey)}`);
     line("");
     line(`Active env is now ${env}. Try it:  qp doctor`);
+  }
+  return 0;
+}
+
+/**
+ * `qp login --staff` — Signicat staff login via portal broker.
+ *
+ * Runs the localhost-callback PKCE flow, exchanges the code for a Signicat
+ * access token via the portal, and stores it as a staff credential. The
+ * resulting credential is used by `qp authority` commands as a Bearer token
+ * on vanta's HUMAN-classified staff endpoints.
+ */
+export async function runStaffLogin(opts: {
+  env: ReqportEnv;
+  portalUrl?: string;
+  json?: boolean;
+}): Promise<number> {
+  const portalUrl = resolvePortalUrl(opts.portalUrl, opts.env);
+  const progress = (m: string) => err(m); // → stderr so --json stdout stays clean
+
+  const result = await _runStaffLogin({ portalUrl, env: opts.env }, progress);
+
+  saveStaffCredential({
+    bearer: result.bearer,
+    
+    email: result.email,
+    expiresAt: result.expiresAt,
+    env: opts.env,
+    portalUrl,
+    savedAt: Date.now(),
+  });
+
+  if (opts.json) {
+    printJson({
+      ok: true,
+      env: opts.env,
+      email: result.email,
+      expiresAt: result.expiresAt,
+    });
+  } else {
+    line("");
+    line(`Staff credential stored for env: ${opts.env}`);
+    line(`  email:    ${result.email}`);
+    line(`  expires:  ${result.expiresAt ?? "(no expiry)"}`);
+    line("");
   }
   return 0;
 }

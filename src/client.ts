@@ -65,10 +65,10 @@ import type {
   WorkflowInstanceResponse,
 } from "./types.js";
 
-/** A resolved bearer credential (an rqk_live_ API key under the pairing model). */
+/** A resolved bearer credential. `apikey` = rqk_live_ key; `signicat` = human Signicat access token. */
 export type Credential = {
   value: string;
-  kind: "apikey";
+  kind: "apikey" | "signicat";
 };
 
 export type ReqportClientOptions = {

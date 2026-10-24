@@ -11,8 +11,9 @@
  */
 
 import { ReqportClient } from "../client.js";
+import type { Credential } from "../client.js";
 import { type ReqportEnv } from "../env.js";
-import { requireResponderCredential } from "../auth/session.js";
+import { requireStaffCredential } from "../auth/session.js";
 import { err, line, printJson, table } from "../ui.js";
 import type { AuthorityIntake } from "../types.js";
 
@@ -52,7 +53,10 @@ export async function runAuthorityPropose(
     riskTier: (opts.riskTier ?? "STANDARD") as "STANDARD" | "AUTO_APPROVE",
   };
 
-  const client = new ReqportClient({ env, credential: await requireResponderCredential() });
+  const client = new ReqportClient({
+    env,
+    credential: (await requireStaffCredential(env)) ,
+  });
   const item = await client.proposeAuthority(intake);
 
   if (opts.json) {
@@ -84,7 +88,10 @@ export async function runAuthorityListPending(
   opts: { status?: string; json?: boolean }
 ): Promise<number> {
   const status = opts.status ?? "PENDING";
-  const client = new ReqportClient({ env, credential: await requireResponderCredential() });
+  const client = new ReqportClient({
+    env,
+    credential: (await requireStaffCredential(env)) ,
+  });
   const items = await client.listAuthorityReview(status);
 
   if (opts.json) {
@@ -125,7 +132,10 @@ export async function runAuthorityApprove(
   id: string,
   opts: { json?: boolean }
 ): Promise<number> {
-  const client = new ReqportClient({ env, credential: await requireResponderCredential() });
+  const client = new ReqportClient({
+    env,
+    credential: (await requireStaffCredential(env)) ,
+  });
   const item = await client.approveAuthorityReview(id);
 
   if (opts.json) {
