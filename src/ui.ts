@@ -104,7 +104,7 @@ export function explainError(e: unknown): string {
     }
     const hint =
       e.status === 401
-        ? " — check REQPORT_API_KEY is a valid rqk_live_ key for this --env."
+        ? " — invalid or expired credential. For automation: check REQPORT_API_KEY. For staff commands: re-run `qp login --staff --env <env>`."
         : e.status === 403
           ? " — the key lacks the required scope, or your org is not a party to this request."
           : e.status === 404
