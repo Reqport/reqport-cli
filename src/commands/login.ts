@@ -106,7 +106,7 @@ export async function runStaffLogin(opts: {
   portalUrl?: string;
   json?: boolean;
 }): Promise<number> {
-  const portalUrl = resolvePortalUrl(opts.portalUrl);
+  const portalUrl = resolvePortalUrl(opts.portalUrl, opts.env);
   const progress = (m: string) => err(m); // → stderr so --json stdout stays clean
 
   const result = await _runStaffLogin({ portalUrl, env: opts.env }, progress);
