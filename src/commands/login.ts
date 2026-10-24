@@ -112,8 +112,8 @@ export async function runStaffLogin(opts: {
   const result = await _runStaffLogin({ portalUrl, env: opts.env }, progress);
 
   saveStaffCredential({
-    accessToken: result.accessToken,
-    idToken: result.idToken,
+    bearer: result.bearer,
+    
     email: result.email,
     expiresAt: result.expiresAt,
     env: opts.env,

@@ -17,8 +17,8 @@ import { createPkce, randomState } from "./pkce.js";
 import { openBrowser } from "./openBrowser.js";
 
 export type StaffLoginResult = {
-  accessToken: string;
-  idToken: string;
+  /** The Signicat access token — used as Bearer on vanta staff endpoints. */
+  bearer: string;
   email: string;
   expiresAt: string | null; // ISO8601
 };
@@ -193,15 +193,13 @@ export async function runStaffLogin(
   }
 
   const tokens = (await exchangeResp.json()) as {
-    accessToken: string;
-    idToken: string;
+    bearer: string;
     email: string;
     expiresAt?: string | null;
   };
 
   return {
-    accessToken: tokens.accessToken,
-    idToken: tokens.idToken,
+    bearer: tokens.bearer,
     email: tokens.email,
     expiresAt: tokens.expiresAt ?? null,
   };

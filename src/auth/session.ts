@@ -62,7 +62,7 @@ export async function requireStaffCredential(
       `Staff session expired. Run: qp login --staff --env ${env} to re-authenticate.`
     );
   }
-  return { value: cred.accessToken, kind: "signicat" };
+  return { value: cred.bearer, kind: "signicat" };
 }
 
 /** A non-secret, LOCAL-ONLY description of the stored login for status output. */
