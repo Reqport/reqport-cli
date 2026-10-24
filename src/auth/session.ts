@@ -10,6 +10,7 @@
 import type { Credential } from "../client.js";
 import { credentialBaseUrl, readApiKey } from "../env.js";
 import { clearCredential, loadCredential } from "./store.js";
+import { isStaffCredentialExpired, loadStaffCredential } from "./staffStore.js";
 
 export function isLoggedIn(): boolean {
   return Boolean(loadCredential());
@@ -41,6 +42,27 @@ export async function requireResponderCredential(): Promise<Credential> {
     );
   }
   return cred;
+}
+
+/**
+ * Require a staff (Signicat) credential for staff oracle commands.
+ * Throws an actionable error if missing or expired.
+ */
+export async function requireStaffCredential(
+  env: string
+): Promise<{ value: string; kind: "signicat" }> {
+  const cred = loadStaffCredential(env);
+  if (!cred) {
+    throw new Error(
+      `No staff credential for '${env}'. Run: qp login --staff --env ${env}`
+    );
+  }
+  if (isStaffCredentialExpired(cred)) {
+    throw new Error(
+      `Staff session expired. Run: qp login --staff --env ${env} to re-authenticate.`
+    );
+  }
+  return { value: cred.accessToken, kind: "signicat" };
 }
 
 /** A non-secret, LOCAL-ONLY description of the stored login for status output. */

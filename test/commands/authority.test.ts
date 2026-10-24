@@ -37,6 +37,10 @@ vi.mock("../../src/auth/session.js", () => ({
     value: "rqk_live_testkey",
     kind: "apikey",
   }),
+  requireStaffCredential: vi.fn().mockResolvedValue({
+    value: "signicat_access_token_stub",
+    kind: "signicat",
+  }),
 }));
 
 // ── Deferred imports (after vi.mock so they receive the mocked versions) ─────
