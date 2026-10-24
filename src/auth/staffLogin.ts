@@ -87,13 +87,33 @@ function waitForCallback(server: Server): Promise<CallbackResult> {
           res.end("Missing code or state");
           return;
         }
-        res.writeHead(200, { "Content-Type": "text/html" });
-        res.end(
-          "<html><body>" +
-            "<h1>Authenticated</h1>" +
-            "<p>You may close this window and return to the terminal.</p>" +
-            "</body></html>"
-        );
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Reqport CLI — signed in</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+       background:#0f0f0f;color:#f0f0f0;
+       display:flex;align-items:center;justify-content:center;min-height:100vh}
+  .card{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;
+        padding:40px 48px;text-align:center;max-width:400px;width:90%}
+  .check{font-size:48px;margin-bottom:16px}
+  h1{font-size:20px;font-weight:600;margin-bottom:8px}
+  p{font-size:14px;color:#888;line-height:1.5}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="check">✓</div>
+  <h1>Signed in</h1>
+  <p>You can close this window and return to the terminal.</p>
+</div>
+</body>
+</html>`);
         server.close();
         resolve({ code, state: callbackState });
       } catch (e) {
@@ -137,7 +157,12 @@ export async function runStaffLogin(
   );
 
   // 4. Wait for the callback with a timeout and clean SIGINT handling.
+  // IMPORTANT: both the SIGINT listener and the deadline timer must be torn down
+  // after the race resolves — otherwise the pending timer keeps the process alive
+  // even after a successful login.
   let onSigint: (() => void) | undefined;
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+
   const cancelled = new Promise<never>((_, reject) => {
     onSigint = () => {
       server.close();
@@ -145,22 +170,23 @@ export async function runStaffLogin(
     };
     process.once("SIGINT", onSigint);
   });
-  const timedOut = new Promise<never>((_, reject) =>
-    setTimeout(() => {
+  const timedOut = new Promise<never>((_, reject) => {
+    deadlineTimer = setTimeout(() => {
       server.close();
       reject(
         new Error(
           `Staff login timed out after ${Math.round(timeoutMs / 60_000)} minutes. Try again.`
         )
       );
-    }, timeoutMs)
-  );
+    }, timeoutMs);
+  });
 
   let callbackResult: CallbackResult;
   try {
     callbackResult = await Promise.race([waitForCallback(server), cancelled, timedOut]);
   } finally {
     if (onSigint) process.removeListener("SIGINT", onSigint);
+    if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
   }
 
   // 5. Verify state to prevent CSRF.
